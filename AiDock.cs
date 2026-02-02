@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace GodotAiAssistant
@@ -16,6 +17,7 @@ namespace GodotAiAssistant
         private RichTextLabel _chatDisplay;
         private TextEdit _inputBox;
         private Button _sendBtn;
+        private Button _stopBtn;
         private Button _settingsBtn;
         private PopupPanel _settingsPopup;
 
@@ -25,6 +27,9 @@ namespace GodotAiAssistant
         private AppConfig _config;
         private readonly System.Net.Http.HttpClient _httpClient = new System.Net.Http.HttpClient();
         private List<object> _chatHistory = new List<object>();
+
+        // NEW: For handling cancellation
+        private CancellationTokenSource _cancellationTokenSource;
 
         public override void _Ready()
         {
@@ -63,15 +68,27 @@ namespace GodotAiAssistant
             // Input Area
             var inputContainer = new HBoxContainer { CustomMinimumSize = new Vector2(0, 100) };
             _inputBox = new TextEdit { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+
             _sendBtn = new Button { Text = "Send" };
             _sendBtn.Pressed += OnSendPressed;
 
+            // NEW: Create and configure the Stop button
+            _stopBtn = new Button { Text = "Stop", Visible = false }; // Start hidden
+            _stopBtn.Pressed += OnStopPressed;
+
             inputContainer.AddChild(_inputBox);
             inputContainer.AddChild(_sendBtn);
+            inputContainer.AddChild(_stopBtn);
             _mainLayout.AddChild(inputContainer);
 
             CreateSettingsPopup();
             AppendSystemMessage("AI Assistant Ready. Configure settings to start.");
+        }
+
+        private void OnStopPressed()
+        {
+            _cancellationTokenSource?.Cancel();
+            AppendSystemMessage("Attempting to stop generation...");
         }
 
         private void CreateSettingsPopup()
@@ -120,21 +137,39 @@ namespace GodotAiAssistant
         private async void OnSendPressed()
         {
             string text = _inputBox.Text.Trim();
-            if (string.IsNullOrEmpty(text)) return;
+            if (string.IsNullOrEmpty(text) || !_sendBtn.Disabled == false) return; // MODIFIED: Prevent multiple sends
 
             _inputBox.Text = "";
             AppendMessage("User", text);
 
             _chatHistory.Add(new { role = "user", content = text });
+
             _sendBtn.Disabled = true;
+            _stopBtn.Visible = true;
+            _cancellationTokenSource = new CancellationTokenSource();
 
-            await ProcessChatLoop();
-
-            _sendBtn.Disabled = false;
+            try
+            {
+                await ProcessChatLoop(_cancellationTokenSource.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                AppendSystemMessage("Generation stopped by user.");
+            }
+            catch (Exception ex)
+            {
+                AppendSystemMessage($"An unexpected error occurred: {ex.Message}");
+            }
+            finally
+            {
+                _sendBtn.Disabled = false;
+                _stopBtn.Visible = false;
+                _cancellationTokenSource.Dispose();
+                _cancellationTokenSource = null;
+            }
         }
 
-        // 处理多轮对话和函数调用的核心循环
-        private async Task ProcessChatLoop()
+        private async Task ProcessChatLoop(CancellationToken cancellationToken)
         {
             int safetyLoop = 0;
             bool keepGoing = true;
@@ -142,9 +177,12 @@ namespace GodotAiAssistant
             while (keepGoing && safetyLoop < 5) // 防止死循环
             {
                 safetyLoop++;
+                cancellationToken.ThrowIfCancellationRequested();
+
                 try
                 {
-                    var responseJson = await SendToApi();
+                    // MODIFIED: Pass token to the API call
+                    var responseJson = await SendToApi(cancellationToken);
 
                     using var doc = JsonDocument.Parse(responseJson);
                     var root = doc.RootElement;
@@ -176,7 +214,7 @@ namespace GodotAiAssistant
                             toolCallsList.Add(JsonSerializer.Deserialize<object>(tc.GetRawText()));
                         }
                         assistantMsg["tool_calls"] = toolCallsList;
-                        _chatHistory.Add(assistantMsg); // 添加含有 tool_calls 的消息到历史
+                        _chatHistory.Add(assistantMsg);
 
                         if (content != null) AppendMessage("AI", content);
                         AppendSystemMessage("Processing tools...");
@@ -191,7 +229,6 @@ namespace GodotAiAssistant
 
                             string result = ExecuteTool(funcName, argsJson);
 
-                            // 将工具结果加入历史
                             _chatHistory.Add(new
                             {
                                 role = "tool",
@@ -199,11 +236,9 @@ namespace GodotAiAssistant
                                 content = result
                             });
                         }
-                        // 循环继续，将工具结果发回给 LLM
                     }
                     else
                     {
-                        // 没有工具调用，对话结束
                         if (content != null) AppendMessage("AI", content);
                         _chatHistory.Add(assistantMsg);
                         keepGoing = false;
@@ -211,6 +246,8 @@ namespace GodotAiAssistant
                 }
                 catch (Exception ex)
                 {
+                    if (ex is OperationCanceledException) throw;
+
                     AppendSystemMessage($"Exception: {ex.Message}");
                     keepGoing = false;
                 }
@@ -245,13 +282,13 @@ namespace GodotAiAssistant
             }
         }
 
-        private async Task<string> SendToApi()
+        private async Task<string> SendToApi(CancellationToken cancellationToken)
         {
             var requestBody = new
             {
                 model = _config.Model,
                 messages = _chatHistory,
-                tools = AiTools.GetToolDefinitions() // 注入工具
+                tools = AiTools.GetToolDefinitions()
             };
 
             var json = JsonSerializer.Serialize(requestBody);
@@ -259,7 +296,7 @@ namespace GodotAiAssistant
 
             _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _config.ApiKey);
 
-            var response = await _httpClient.PostAsync(_config.Endpoint, content);
+            var response = await _httpClient.PostAsync(_config.Endpoint, content, cancellationToken);
             return await response.Content.ReadAsStringAsync();
         }
 
