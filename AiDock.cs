@@ -272,6 +272,12 @@ namespace GodotAiAssistant
                     case "search_files":
                         string p3 = root.GetProperty("keyword").GetString();
                         return AiTools.SearchFiles(p3);
+                    case "get_scene_tree":
+                        string id1 = root.GetProperty("node_id").ToString();
+                        return AiTools.GetSceneTree(id1);
+                    case "get_node_properties":
+                        string id2 = root.GetProperty("node_id").ToString();
+                        return AiTools.GetNodeProperties(id2);
                     default:
                         return "Error: Unknown tool.";
                 }
