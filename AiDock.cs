@@ -283,6 +283,10 @@ namespace GodotAiAssistant
                     case "get_node_properties_by_path":
                         string path = root.GetProperty("path").GetString();
                         return AiTools.GetNodePropertiesByPath(path);
+                    case "get_node_property_value":
+                        string nPath = root.GetProperty("node_path").GetString();
+                        string pPath = root.GetProperty("property_path").GetString();
+                        return AiTools.GetNodePropertyValue(nPath, pPath);
                     default:
                         return "Error: Unknown tool.";
                 }
@@ -299,7 +303,8 @@ namespace GodotAiAssistant
             {
                 model = _config.Model,
                 messages = _chatHistory,
-                tools = AiTools.GetToolDefinitions()
+                tools = AiTools.GetToolDefinitions(),
+                max_tokens = 8192
             };
 
             var json = JsonSerializer.Serialize(requestBody);

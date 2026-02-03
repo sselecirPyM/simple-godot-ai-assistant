@@ -108,6 +108,22 @@ namespace GodotAiAssistant
                             required = new[] { "path" }
                         }
                     }
+                },
+                new {
+                    type = "function",
+                    function = new {
+                        name = "get_node_property_value",
+                        description = "Get a specific property value or sub-resource from a node using a path. " +
+                                      "Useful for accessing nested resources like 'mesh/material/albedo_color' or 'surface_material_override/0'.",
+                        parameters = new {
+                            type = "object",
+                            properties = new {
+                                node_path = new { type = "string", description = "Path to the scene node (e.g. 'Player/MeshInstance')." },
+                                property_path = new { type = "string", description = "Path to the property or sub-resource (e.g. 'mesh:material:albedo_color' or 'surface_material_override/0'). Slashes are automatically converted to colons where appropriate." }
+                            },
+                            required = new[] { "node_path", "property_path" }
+                        }
+                    }
                 }
             };
         }
@@ -173,7 +189,7 @@ namespace GodotAiAssistant
             }
             return string.Join("\n", results).Trim();
         }
-        
+
         private static Node GetNodeFromId(string idStr)
         {
             var root = GetEditedRoot();
@@ -204,10 +220,10 @@ namespace GodotAiAssistant
         {
             string indent = new string(' ', depth * 2);
             string line = $"{indent}- {node.Name} ({node.GetType().Name}) [ID: {node.GetInstanceId()}]";
-            
+
             if (!string.IsNullOrEmpty(node.SceneFilePath))
                 line += $" [Scene: {node.SceneFilePath}]";
-            
+
             sb.AppendLine(line);
 
             //foreach (var child in node.GetChildren())
@@ -236,7 +252,6 @@ namespace GodotAiAssistant
             foreach (Node node in nodes)
             {
                 var root = editorInterface.GetEditedSceneRoot();
-                // 获取相对于编辑场景根节点的路径
                 string path = root != null ? root.GetPathTo(node) : node.GetPath();
 
                 resultList.Add(new
@@ -245,7 +260,7 @@ namespace GodotAiAssistant
                     Class = node.GetType().Name,
                     Path = path,
                     InstanceId = node.GetInstanceId().ToString(),
-                    SceneFile = node.SceneFilePath // 如果是实例化的场景
+                    SceneFile = node.SceneFilePath
                 });
             }
 
@@ -332,6 +347,131 @@ namespace GodotAiAssistant
                     if (valStr.Length > 200) valStr = valStr.Substring(0, 200) + "...(truncated)";
 
                     propDict[name] = valStr;
+                }
+                catch (Exception)
+                {
+                    propDict[name] = "<Error reading property>";
+                }
+            }
+
+            return JsonSerializer.Serialize(propDict, new JsonSerializerOptions { WriteIndented = true });
+        }
+
+        public static string GetNodePropertyValue(string nodePath, string propertyPath)
+        {
+            var root = GetEditedRoot();
+            if (root == null) return "Error: No scene currently open.";
+
+            Node targetNode = (string.IsNullOrEmpty(nodePath) || nodePath == ".") ? root : root.GetNodeOrNull(nodePath);
+            if (targetNode == null) return $"Error: Could not find node at path '{nodePath}'.";
+
+            try
+            {
+                Variant val = targetNode.GetIndexed(propertyPath);
+
+                if (val.VariantType == Variant.Type.Nil && propertyPath.Contains("/"))
+                {
+                    string altPath = propertyPath.Replace("/", ":");
+                    val = targetNode.GetIndexed(altPath);
+                }
+
+                if (val.VariantType == Variant.Type.Nil)
+                {
+                    string topProp = propertyPath.Split(new[] { '/', ':' })[0];
+                    if (targetNode.Get(topProp).VariantType == Variant.Type.Nil)
+                        return $"Error: Property path '{propertyPath}' returned Nil (or path is invalid).";
+                }
+
+                if (val.Obj is GodotObject obj)
+                {
+                    return SerializeGodotObject(obj);
+                }
+                else
+                {
+                    return val.ToString();
+                }
+            }
+            catch (Exception ex)
+            {
+                return $"Error accessing property '{propertyPath}': {ex.Message}";
+            }
+        }
+
+        private static string SerializeGodotObject(GodotObject obj)
+        {
+            if (obj == null) return "null";
+
+            var propDict = new Dictionary<string, object>();
+
+            propDict["_Info_"] = new
+            {
+                Class = obj.GetType().Name,
+                InstanceId = obj.GetInstanceId().ToString(),
+                ToString = obj.ToString()
+            };
+
+            // 如果是 Node，添加额外信息
+            if (obj is Node node)
+            {
+                propDict["_NodeInfo_"] = new
+                {
+                    Name = node.Name,
+                    Path = node.GetPath().ToString()
+                };
+
+                // 变换简写
+                if (node is Node2D n2d)
+                {
+                    propDict["GlobalPosition"] = n2d.GlobalPosition.ToString();
+                    propDict["Position"] = n2d.Position.ToString();
+                    propDict["RotationDegrees"] = n2d.RotationDegrees;
+                }
+                else if (node is Node3D n3d)
+                {
+                    propDict["GlobalPosition"] = n3d.GlobalPosition.ToString();
+                    propDict["Position"] = n3d.Position.ToString();
+                    propDict["RotationDegrees"] = n3d.RotationDegrees.ToString();
+                }
+            }
+
+            var properties = obj.GetPropertyList();
+
+            foreach (var prop in properties)
+            {
+                string name = prop["name"].AsString();
+                int usage = prop["usage"].AsInt32();
+
+                // 过滤规则：脚本变量、存储变量、编辑器变量
+                bool isScriptVar = (usage & (int)PropertyUsageFlags.ScriptVariable) != 0;
+                bool isStorage = (usage & (int)PropertyUsageFlags.Storage) != 0;
+                bool isEditor = (usage & (int)PropertyUsageFlags.Editor) != 0;
+
+                if (!isScriptVar && !isStorage && !isEditor) continue;
+                if (name.StartsWith("metadata/") || name.Contains("script/source")) continue;
+                if (name.EndsWith(".cs")) continue; // 忽略 C# 脚本自身引用
+
+                try
+                {
+                    Variant val = obj.Get(name);
+
+                    // 处理对象引用，避免循环递归，只返回 ID 和类型
+                    if (val.VariantType == Variant.Type.Object && val.Obj != null)
+                    {
+                        var childObj = val.Obj;
+                        string resPath = (childObj is Resource r) ? r.ResourcePath : "";
+                        if (val.Obj is not GodotObject godotObject)
+                        {
+                            godotObject = null;
+                        }
+
+                        propDict[name] = $"<Object: {childObj.GetType().Name} (ID: {godotObject?.GetInstanceId()}) {resPath}>";
+                    }
+                    else
+                    {
+                        string valStr = val.ToString();
+                        if (valStr.Length > 200) valStr = valStr.Substring(0, 200) + "...(truncated)";
+                        propDict[name] = valStr;
+                    }
                 }
                 catch (Exception)
                 {
