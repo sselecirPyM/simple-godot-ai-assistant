@@ -21,6 +21,9 @@ namespace GodotAiAssistant
         private Button _settingsBtn;
         private PopupPanel _settingsPopup;
 
+        // 新增：用于显示 Token 计数的 Label
+        private Label _contextLabel;
+
         // Settings UI
         private LineEdit _urlEdit, _keyEdit, _modelEdit;
 
@@ -49,8 +52,27 @@ namespace GodotAiAssistant
             toolBar.AddChild(_settingsBtn);
 
             var clearBtn = new Button { Text = "Clear Chat" };
-            clearBtn.Pressed += () => { _chatHistory.Clear(); _chatDisplay.Text = ""; };
+            clearBtn.Pressed += () =>
+            {
+                _chatHistory.Clear();
+                _chatDisplay.Text = "";
+                UpdateContextCount(); // 清空时更新计数
+            };
             toolBar.AddChild(clearBtn);
+
+            // [新增] 占位符，将后面的元素推向右边
+            var spacer = new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+            toolBar.AddChild(spacer);
+
+            // [新增] 上下文长度显示
+            _contextLabel = new Label
+            {
+                Text = "Tokens: 0",
+                VerticalAlignment = VerticalAlignment.Center,
+                Modulate = new Color(0.7f, 0.7f, 0.7f) // 稍微变灰一点
+            };
+            toolBar.AddChild(_contextLabel);
+
             _mainLayout.AddChild(toolBar);
 
             // Chat Display
@@ -81,6 +103,30 @@ namespace GodotAiAssistant
 
             CreateSettingsPopup();
             AppendSystemMessage("AI Assistant Ready. Configure settings to start.");
+            UpdateContextCount(); // 初始化显示
+        }
+
+        private void UpdateContextCount()
+        {
+            if (_contextLabel == null) return;
+
+            try
+            {
+                // 将历史记录序列化以计算大概的大小
+                // 注意：这是一个估算值 (字符数 / 4)，不是精确的 Tokenizer 结果，但对 UI 展示足够了
+                string json = JsonSerializer.Serialize(_chatHistory);
+                int estTokens = json.Length / 4;
+                _contextLabel.Text = $"Est. Tokens: {estTokens}";
+
+                // 简单的颜色警示
+                if (estTokens > 8000) _contextLabel.Modulate = Colors.Red;
+                else if (estTokens > 4000) _contextLabel.Modulate = Colors.Yellow;
+                else _contextLabel.Modulate = new Color(0.7f, 0.7f, 0.7f);
+            }
+            catch
+            {
+                _contextLabel.Text = "Tokens: ?";
+            }
         }
 
         private void OnStopPressed()
@@ -141,6 +187,7 @@ namespace GodotAiAssistant
             AppendMessage("User", text);
 
             _chatHistory.Add(new { role = "user", content = text });
+            UpdateContextCount();
 
             _sendBtn.Disabled = true;
             _stopBtn.Visible = true;
@@ -167,15 +214,12 @@ namespace GodotAiAssistant
             }
         }
 
-        // ==========================================
-        // KEY MODIFICATIONS START HERE
-        // ==========================================
         private async Task ProcessChatLoop(CancellationToken cancellationToken)
         {
             int safetyLoop = 0;
             bool keepGoing = true;
 
-            while (keepGoing && safetyLoop < 10) // Increased safety loop slightly
+            while (keepGoing && safetyLoop < 10)
             {
                 safetyLoop++;
                 cancellationToken.ThrowIfCancellationRequested();
@@ -213,10 +257,9 @@ namespace GodotAiAssistant
                         assistantMsg["tool_calls"] = toolCallsList;
                         _chatHistory.Add(assistantMsg);
 
-                        if (content != null) AppendMessage("AI", content);
+                        UpdateContextCount();
 
-                        // REMOVED: AppendSystemMessage("Processing tools...");
-                        // ADDED: Detailed logging inside loop
+                        if (content != null) AppendMessage("AI", content);
 
                         // Execute Tools
                         foreach (var tc in toolCalls.EnumerateArray())
@@ -226,20 +269,12 @@ namespace GodotAiAssistant
                             string funcName = func.GetProperty("name").GetString();
                             string argsJson = func.GetProperty("arguments").GetString();
 
-                            // ------------------------------------------
-                            // [MODIFIED] Display Tool Info
-                            // ------------------------------------------
                             AppendSystemMessage($"🛠 [b]Calling Tool:[/b] [color=#88C0D0]{funcName}[/color]\nArguments: [color=#D8DEE9]{argsJson}[/color]");
 
-                            // Yield briefly to let UI update so user sees the tool call happening immediately
                             await Task.Delay(10);
 
                             string result = ExecuteTool(funcName, argsJson);
 
-                            // ------------------------------------------
-                            // [MODIFIED] Display Result Summary (Optional)
-                            // ------------------------------------------
-                            // Truncate result if it's too long to keep chat clean
                             string resultPreview = result.Length > 150 ? result.Substring(0, 150) + "..." : result;
                             AppendSystemMessage($"✅ [b]Result:[/b] [color=#A3BE8C]{resultPreview}[/color]");
 
@@ -249,6 +284,8 @@ namespace GodotAiAssistant
                                 tool_call_id = id,
                                 content = result
                             });
+
+                            UpdateContextCount();
                         }
                     }
                     else
@@ -256,6 +293,9 @@ namespace GodotAiAssistant
                         // No tool calls, just text
                         if (content != null) AppendMessage("AI", content);
                         _chatHistory.Add(assistantMsg);
+
+                        UpdateContextCount();
+
                         keepGoing = false;
                     }
                 }
@@ -268,9 +308,6 @@ namespace GodotAiAssistant
                 }
             }
         }
-        // ==========================================
-        // KEY MODIFICATIONS END HERE
-        // ==========================================
 
         private string ExecuteTool(string name, string jsonArgs)
         {
@@ -279,7 +316,6 @@ namespace GodotAiAssistant
                 using var doc = JsonDocument.Parse(jsonArgs);
                 var root = doc.RootElement;
 
-                // Simple helper to safely get string property
                 string GetArg(string key) => root.TryGetProperty(key, out var p) ? p.ToString() : "";
 
                 switch (name)
@@ -341,7 +377,6 @@ namespace GodotAiAssistant
 
         private void AppendSystemMessage(string text)
         {
-            // Modified color to be a bit more subtle for system logs
             _chatDisplay.AppendText($"[font_size=12][i][color=#d08770]{text}[/color][/i][/font_size]\n");
         }
     }
