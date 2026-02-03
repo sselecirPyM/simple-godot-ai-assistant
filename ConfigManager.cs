@@ -1,4 +1,5 @@
-﻿using System;
+﻿#if TOOLS
+using System;
 using System.IO;
 using System.Text.Json;
 
@@ -45,3 +46,4 @@ namespace GodotAiAssistant
         }
     }
 }
+#endif

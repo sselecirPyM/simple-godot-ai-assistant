@@ -202,7 +202,9 @@ namespace GodotAiAssistant
                 string mimeType = extension == "svg" ? "svg+xml" : (extension == "jpg" ? "jpeg" : extension);
                 return $"data:image/{mimeType};base64,{base64}";
             }
-            return file.GetAsText();
+            var text =  file.GetAsText();
+            file.Close();
+            return text;
         }
 
         public static string SearchFiles(string keyword) => SearchRecursive("res://", keyword);
@@ -483,8 +485,8 @@ namespace GodotAiAssistant
                 }
 
                 file.StoreString(content);
-                file.Flush(); // Ensure write
-
+                file.Flush();
+                file.Close();
                 // 3. Trigger Editor Refresh
                 CallDeferredRefresh();
 

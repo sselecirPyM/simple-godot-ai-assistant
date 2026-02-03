@@ -19,7 +19,8 @@ namespace GodotAiAssistant
         private Button _sendBtn;
         private Button _stopBtn;
         private Button _settingsBtn;
-        private PopupPanel _settingsPopup;
+
+        private PanelContainer _settingsPanel;
 
         // 用于显示 Token 计数的 Label
         private Label _contextLabel;
@@ -41,14 +42,17 @@ namespace GodotAiAssistant
 
         private void SetupUi()
         {
+            // Clean up children if reloading
+            foreach (Node child in GetChildren()) child.QueueFree();
+
             // Layout
             _mainLayout = new VBoxContainer { LayoutMode = 1, AnchorsPreset = (int)LayoutPreset.FullRect };
             AddChild(_mainLayout);
 
-            // Toolbar
+            // --- Toolbar ---
             var toolBar = new HBoxContainer();
-            _settingsBtn = new Button { Text = "Settings" };
-            _settingsBtn.Pressed += ShowSettings;
+            _settingsBtn = new Button { Text = "Settings", ToggleMode = true };
+            _settingsBtn.Toggled += OnSettingsToggled;
             toolBar.AddChild(_settingsBtn);
 
             var clearBtn = new Button { Text = "Clear Chat" };
@@ -56,7 +60,6 @@ namespace GodotAiAssistant
             {
                 _chatHistory.Clear();
                 _chatDisplay.Text = "";
-                // 清空时重置计数显示
                 if (_contextLabel != null) _contextLabel.Text = "Tokens: 0";
             };
             toolBar.AddChild(clearBtn);
@@ -76,7 +79,11 @@ namespace GodotAiAssistant
 
             _mainLayout.AddChild(toolBar);
 
-            // Chat Display
+            // --- Settings Area ---
+            CreateSettingsPanel();
+            _mainLayout.AddChild(_settingsPanel);
+
+            // --- Chat Display ---
             _chatDisplay = new RichTextLabel
             {
                 SizeFlagsVertical = SizeFlags.ExpandFill,
@@ -87,7 +94,7 @@ namespace GodotAiAssistant
             };
             _mainLayout.AddChild(_chatDisplay);
 
-            // Input Area
+            // --- Input Area ---
             var inputContainer = new HBoxContainer { CustomMinimumSize = new Vector2(0, 100) };
             _inputBox = new TextEdit { SizeFlagsHorizontal = SizeFlags.ExpandFill };
 
@@ -102,8 +109,69 @@ namespace GodotAiAssistant
             inputContainer.AddChild(_stopBtn);
             _mainLayout.AddChild(inputContainer);
 
-            CreateSettingsPopup();
             AppendSystemMessage("AI Assistant Ready. Configure settings to start.");
+        }
+        private void CreateSettingsPanel()
+        {
+            // 1. 最外层面板
+            _settingsPanel = new PanelContainer
+            {
+                Visible = false,
+                SizeFlagsHorizontal = SizeFlags.ExpandFill
+            };
+
+            // 2. 边距容器
+            var marginContainer = new MarginContainer();
+            marginContainer.AddThemeConstantOverride("margin_top", 10);
+            marginContainer.AddThemeConstantOverride("margin_bottom", 10);
+            marginContainer.AddThemeConstantOverride("margin_left", 10);
+            marginContainer.AddThemeConstantOverride("margin_right", 10);
+            _settingsPanel.AddChild(marginContainer);
+
+            // 3. 垂直布局容器
+            var contentLayout = new VBoxContainer();
+            marginContainer.AddChild(contentLayout);
+
+            // 4. 输入框区域
+            var grid = new GridContainer { Columns = 2 };
+            grid.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+
+            // Endpoint
+            grid.AddChild(new Label { Text = "Endpoint URL:" });
+            _urlEdit = new LineEdit { Text = _config.Endpoint, SizeFlagsHorizontal = SizeFlags.ExpandFill };
+            grid.AddChild(_urlEdit);
+
+            // API Key
+            grid.AddChild(new Label { Text = "API Key:" });
+            _keyEdit = new LineEdit { Text = _config.ApiKey, Secret = true, SizeFlagsHorizontal = SizeFlags.ExpandFill };
+            grid.AddChild(_keyEdit);
+
+            // Model
+            grid.AddChild(new Label { Text = "Model Name:" });
+            _modelEdit = new LineEdit { Text = _config.Model, SizeFlagsHorizontal = SizeFlags.ExpandFill };
+            grid.AddChild(_modelEdit);
+
+            contentLayout.AddChild(grid);
+
+            contentLayout.AddChild(new Control { CustomMinimumSize = new Vector2(0, 10) });
+
+            var saveBtn = new Button { Text = "Save Settings & Close", CustomMinimumSize = new Vector2(0, 30) };
+            saveBtn.Pressed += SaveSettings;
+
+            contentLayout.AddChild(saveBtn);
+        }
+
+        private void OnSettingsToggled(bool toggledOn)
+        {
+            _settingsPanel.Visible = toggledOn;
+
+            if (toggledOn)
+            {
+                // 打开时刷新显示的数据
+                _urlEdit.Text = _config.Endpoint;
+                _keyEdit.Text = _config.ApiKey;
+                _modelEdit.Text = _config.Model;
+            }
         }
 
         private void UpdateTokenDisplay(int promptTokens, int completionTokens, int totalTokens)
@@ -119,53 +187,24 @@ namespace GodotAiAssistant
             else _contextLabel.Modulate = new Color(0.7f, 0.7f, 0.7f);
         }
 
-        private void OnStopPressed()
-        {
-            _cancellationTokenSource?.Cancel();
-            AppendSystemMessage("Attempting to stop generation...");
-        }
-
-        private void CreateSettingsPopup()
-        {
-            _settingsPopup = new PopupPanel { Size = new Vector2I(400, 250) };
-            var vbox = new VBoxContainer();
-
-            vbox.AddChild(new Label { Text = "Endpoint URL:" });
-            _urlEdit = new LineEdit { Text = _config.Endpoint };
-            vbox.AddChild(_urlEdit);
-
-            vbox.AddChild(new Label { Text = "API Key:" });
-            _keyEdit = new LineEdit { Text = _config.ApiKey, Secret = true };
-            vbox.AddChild(_keyEdit);
-
-            vbox.AddChild(new Label { Text = "Model Name:" });
-            _modelEdit = new LineEdit { Text = _config.Model };
-            vbox.AddChild(_modelEdit);
-
-            var saveBtn = new Button { Text = "Save" };
-            saveBtn.Pressed += SaveSettings;
-            vbox.AddChild(saveBtn);
-
-            _settingsPopup.AddChild(vbox);
-            AddChild(_settingsPopup);
-        }
-
-        private void ShowSettings()
-        {
-            _urlEdit.Text = _config.Endpoint;
-            _keyEdit.Text = _config.ApiKey;
-            _modelEdit.Text = _config.Model;
-            _settingsPopup.PopupCentered();
-        }
-
         private void SaveSettings()
         {
             _config.Endpoint = _urlEdit.Text;
             _config.ApiKey = _keyEdit.Text;
             _config.Model = _modelEdit.Text;
             ConfigManager.SaveConfig(_config);
-            _settingsPopup.Hide();
+
             AppendSystemMessage("Settings saved.");
+
+            // 保存后关闭设置面板，并弹起 Settings 按钮
+            _settingsPanel.Visible = false;
+            _settingsBtn.ButtonPressed = false;
+        }
+
+        private void OnStopPressed()
+        {
+            _cancellationTokenSource?.Cancel();
+            AppendSystemMessage("Attempting to stop generation...");
         }
 
         private async void OnSendPressed()
