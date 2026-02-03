@@ -1,12 +1,14 @@
-﻿using Godot;
+﻿#if TOOLS
+using Godot;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 
 namespace GodotAiAssistant
 {
-    public static class AiTools
+    public static partial class AiTools
     {
         private static readonly HashSet<string> ImageExtensions = new HashSet<string>
         {
@@ -146,7 +148,9 @@ namespace GodotAiAssistant
                         name = "run_gdscript",
                         description = "Execute a temporary GDScript snippet immediately and return the result. " +
                                       "The script MUST contain a 'func run():' method which returns a value (String, Dictionary, or basic type). " +
-                                      "Use this to perform complex calculations, inspect deep scene state, or perform batch editor operations. The \"tool\" keyword was removed in Godot 4. Use the \"@tool\" annotation instead.",
+                                      "Use this to perform complex calculations, inspect deep scene state, or perform batch editor operations." +
+                                      "The \"tool\" keyword was removed in Godot 4. Use the \"@tool\" annotation instead." +
+                                      "Cannot use get_tree(), use EditorInterface.get_edited_scene_root() instead.",
                         parameters = new {
                             type = "object",
                             properties = new {
@@ -243,12 +247,13 @@ namespace GodotAiAssistant
             if (node == null) return "Error: Could not find node or no scene is open.";
 
             System.Text.StringBuilder sb = new System.Text.StringBuilder();
-            BuildTree(node, sb, 0);
+            BuildTreeRecursive(node, sb, 0);
             return sb.ToString();
         }
 
-        private static void BuildTree(Node node, System.Text.StringBuilder sb, int depth)
+        private static void BuildTreeRecursive(Node node, System.Text.StringBuilder sb, int depth)
         {
+
             string indent = new string(' ', depth * 2);
             string line = $"{indent}- {node.Name} ({node.GetType().Name}) [ID: {node.GetInstanceId()}]";
 
@@ -257,10 +262,12 @@ namespace GodotAiAssistant
 
             sb.AppendLine(line);
 
-            //foreach (var child in node.GetChildren())
-            //{
-            //    BuildTreeRecursive(child, sb, depth + 1);
-            //}
+            if (depth >= 1)
+                return;
+            foreach (var child in node.GetChildren())
+            {
+                BuildTreeRecursive(child, sb, depth + 1);
+            }
         }
 
         private static Node GetEditedRoot()
@@ -491,7 +498,6 @@ namespace GodotAiAssistant
 
         private static void CallDeferredRefresh()
         {
-            // We run this on the main thread to ensure the EditorFileSystem updates safely
             var editorInterface = EditorInterface.Singleton;
             if (editorInterface != null)
             {
@@ -499,17 +505,80 @@ namespace GodotAiAssistant
             }
         }
 
+
+        private static ErrorCaptureLogger _errorLogger;
+
+        private partial class ErrorCaptureLogger : Logger
+        {
+            private StringBuilder _logBuffer = new StringBuilder();
+            private bool _isCapturing = false;
+
+            public void StartCapturing()
+            {
+                _logBuffer.Clear();
+                _isCapturing = true;
+            }
+
+            public string StopCapturing()
+            {
+                _isCapturing = false;
+                return _logBuffer.ToString().Trim();
+            }
+
+            public override void _LogMessage(string message, bool error)
+            {
+                if (_isCapturing && error)
+                {
+                    _logBuffer.AppendLine($"[Message]: {message}");
+                }
+            }
+
+            public override void _LogError(
+                string function,
+                string file,
+                int line,
+                string code,
+                string rationale,
+                bool editorNotify,
+                int errorType,
+                Godot.Collections.Array<ScriptBacktrace> scriptBacktraces
+            )
+            {
+                if (_isCapturing)
+                {
+                    _logBuffer.AppendLine($"[Line {line}]: {rationale}");
+                }
+            }
+        }
+
         public static string RunGdScript(string code)
         {
+            if (_errorLogger == null)
+            {
+                _errorLogger = new ErrorCaptureLogger();
+                OS.AddLogger(_errorLogger);
+            }
+
             try
             {
                 using var script = new GDScript();
                 script.SourceCode = code;
 
+                // --- 开始捕获 ---
+                _errorLogger.StartCapturing();
+
                 Error err = script.Reload();
+
+                // --- 停止捕获 ---
+                string detailedError = _errorLogger.StopCapturing();
+
                 if (err != Error.Ok)
                 {
-                    return $"GDScript Syntax Error: {err}. Please check your code.";
+                    if (!string.IsNullOrWhiteSpace(detailedError))
+                    {
+                        return $"GDScript Error ({err}):\n{detailedError}\n\nPlease check your code.";
+                    }
+                    return $"GDScript Syntax Error: {err}. (No details captured). Please check your code.";
                 }
 
                 GodotObject instance;
@@ -552,6 +621,11 @@ namespace GodotAiAssistant
             {
                 return $"Runtime Error executing GDScript: {ex.Message}";
             }
+            finally
+            {
+                if (_errorLogger != null) _errorLogger.StopCapturing();
+            }
         }
     }
 }
+#endif

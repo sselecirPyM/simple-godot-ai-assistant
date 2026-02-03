@@ -21,7 +21,7 @@ namespace GodotAiAssistant
         private Button _settingsBtn;
         private PopupPanel _settingsPopup;
 
-        // 新增：用于显示 Token 计数的 Label
+        // 用于显示 Token 计数的 Label
         private Label _contextLabel;
 
         // Settings UI
@@ -56,20 +56,21 @@ namespace GodotAiAssistant
             {
                 _chatHistory.Clear();
                 _chatDisplay.Text = "";
-                UpdateContextCount(); // 清空时更新计数
+                // 清空时重置计数显示
+                if (_contextLabel != null) _contextLabel.Text = "Tokens: 0";
             };
             toolBar.AddChild(clearBtn);
 
-            // [新增] 占位符，将后面的元素推向右边
+            // 占位符
             var spacer = new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill };
             toolBar.AddChild(spacer);
 
-            // [新增] 上下文长度显示
+            // 上下文长度显示
             _contextLabel = new Label
             {
                 Text = "Tokens: 0",
                 VerticalAlignment = VerticalAlignment.Center,
-                Modulate = new Color(0.7f, 0.7f, 0.7f) // 稍微变灰一点
+                Modulate = new Color(0.7f, 0.7f, 0.7f)
             };
             toolBar.AddChild(_contextLabel);
 
@@ -103,30 +104,19 @@ namespace GodotAiAssistant
 
             CreateSettingsPopup();
             AppendSystemMessage("AI Assistant Ready. Configure settings to start.");
-            UpdateContextCount(); // 初始化显示
         }
 
-        private void UpdateContextCount()
+        private void UpdateTokenDisplay(int promptTokens, int completionTokens, int totalTokens)
         {
             if (_contextLabel == null) return;
 
-            try
-            {
-                // 将历史记录序列化以计算大概的大小
-                // 注意：这是一个估算值 (字符数 / 4)，不是精确的 Tokenizer 结果，但对 UI 展示足够了
-                string json = JsonSerializer.Serialize(_chatHistory);
-                int estTokens = json.Length / 4;
-                _contextLabel.Text = $"Est. Tokens: {estTokens}";
+            // 显示格式：Total (Input + Output)
+            _contextLabel.Text = $"Tokens: {totalTokens} (In: {promptTokens} / Out: {completionTokens})";
 
-                // 简单的颜色警示
-                if (estTokens > 8000) _contextLabel.Modulate = Colors.Red;
-                else if (estTokens > 4000) _contextLabel.Modulate = Colors.Yellow;
-                else _contextLabel.Modulate = new Color(0.7f, 0.7f, 0.7f);
-            }
-            catch
-            {
-                _contextLabel.Text = "Tokens: ?";
-            }
+            // 简单的颜色警示 (根据 Total Tokens)
+            if (totalTokens > 12000) _contextLabel.Modulate = Colors.Red;
+            else if (totalTokens > 8000) _contextLabel.Modulate = Colors.Yellow;
+            else _contextLabel.Modulate = new Color(0.7f, 0.7f, 0.7f);
         }
 
         private void OnStopPressed()
@@ -187,7 +177,7 @@ namespace GodotAiAssistant
             AppendMessage("User", text);
 
             _chatHistory.Add(new { role = "user", content = text });
-            UpdateContextCount();
+            // 注意：这里不再调用 UpdateContextCount，因为我们等待 API 返回准确值
 
             _sendBtn.Disabled = true;
             _stopBtn.Visible = true;
@@ -219,7 +209,7 @@ namespace GodotAiAssistant
             int safetyLoop = 0;
             bool keepGoing = true;
 
-            while (keepGoing && safetyLoop < 10)
+            while (keepGoing && safetyLoop < 15)
             {
                 safetyLoop++;
                 cancellationToken.ThrowIfCancellationRequested();
@@ -237,11 +227,21 @@ namespace GodotAiAssistant
                         return;
                     }
 
+                    if (root.TryGetProperty("usage", out var usage))
+                    {
+                        int pTokens = usage.TryGetProperty("prompt_tokens", out var p) ? p.GetInt32() : 0;
+                        int cTokens = usage.TryGetProperty("completion_tokens", out var c) ? c.GetInt32() : 0;
+                        int tTokens = usage.TryGetProperty("total_tokens", out var t) ? t.GetInt32() : 0;
+
+                        // 更新 UI 显示
+                        UpdateTokenDisplay(pTokens, cTokens, tTokens);
+                    }
+
                     var choice = root.GetProperty("choices")[0];
                     var message = choice.GetProperty("message");
 
                     // 1. Handle Content
-                    string content = message.TryGetProperty("content", out var c) && c.ValueKind != JsonValueKind.Null ? c.GetString() : null;
+                    string content = message.TryGetProperty("content", out var cVal) && cVal.ValueKind != JsonValueKind.Null ? cVal.GetString() : null;
 
                     var assistantMsg = new Dictionary<string, object> { ["role"] = "assistant" };
                     if (content != null) assistantMsg["content"] = content;
@@ -257,8 +257,6 @@ namespace GodotAiAssistant
                         assistantMsg["tool_calls"] = toolCallsList;
                         _chatHistory.Add(assistantMsg);
 
-                        UpdateContextCount();
-
                         if (content != null) AppendMessage("AI", content);
 
                         // Execute Tools
@@ -271,7 +269,7 @@ namespace GodotAiAssistant
 
                             AppendSystemMessage($"🛠 [b]Calling Tool:[/b] [color=#88C0D0]{funcName}[/color]\nArguments: [color=#D8DEE9]{argsJson}[/color]");
 
-                            await Task.Delay(10);
+                            await Task.Delay(10); // UI Refresh
 
                             string result = ExecuteTool(funcName, argsJson);
 
@@ -284,18 +282,14 @@ namespace GodotAiAssistant
                                 tool_call_id = id,
                                 content = result
                             });
-
-                            UpdateContextCount();
                         }
+                        // 工具执行完毕，循环继续，将发送新的请求，届时会获得最新的 Token 计数
                     }
                     else
                     {
                         // No tool calls, just text
                         if (content != null) AppendMessage("AI", content);
                         _chatHistory.Add(assistantMsg);
-
-                        UpdateContextCount();
-
                         keepGoing = false;
                     }
                 }
@@ -357,7 +351,7 @@ namespace GodotAiAssistant
                 model = _config.Model,
                 messages = _chatHistory,
                 tools = AiTools.GetToolDefinitions(),
-                max_tokens = 8192
+                max_tokens = 16384
             };
 
             var json = JsonSerializer.Serialize(requestBody);
