@@ -28,7 +28,6 @@ namespace GodotAiAssistant
         private readonly System.Net.Http.HttpClient _httpClient = new System.Net.Http.HttpClient();
         private List<object> _chatHistory = new List<object>();
 
-        // NEW: For handling cancellation
         private CancellationTokenSource _cancellationTokenSource;
 
         public override void _Ready()
@@ -72,8 +71,7 @@ namespace GodotAiAssistant
             _sendBtn = new Button { Text = "Send" };
             _sendBtn.Pressed += OnSendPressed;
 
-            // NEW: Create and configure the Stop button
-            _stopBtn = new Button { Text = "Stop", Visible = false }; // Start hidden
+            _stopBtn = new Button { Text = "Stop", Visible = false };
             _stopBtn.Pressed += OnStopPressed;
 
             inputContainer.AddChild(_inputBox);
@@ -137,7 +135,7 @@ namespace GodotAiAssistant
         private async void OnSendPressed()
         {
             string text = _inputBox.Text.Trim();
-            if (string.IsNullOrEmpty(text) || !_sendBtn.Disabled == false) return; // MODIFIED: Prevent multiple sends
+            if (string.IsNullOrEmpty(text) || !_sendBtn.Disabled == false) return;
 
             _inputBox.Text = "";
             AppendMessage("User", text);
@@ -169,25 +167,26 @@ namespace GodotAiAssistant
             }
         }
 
+        // ==========================================
+        // KEY MODIFICATIONS START HERE
+        // ==========================================
         private async Task ProcessChatLoop(CancellationToken cancellationToken)
         {
             int safetyLoop = 0;
             bool keepGoing = true;
 
-            while (keepGoing && safetyLoop < 5) // 防止死循环
+            while (keepGoing && safetyLoop < 10) // Increased safety loop slightly
             {
                 safetyLoop++;
                 cancellationToken.ThrowIfCancellationRequested();
 
                 try
                 {
-                    // MODIFIED: Pass token to the API call
                     var responseJson = await SendToApi(cancellationToken);
 
                     using var doc = JsonDocument.Parse(responseJson);
                     var root = doc.RootElement;
 
-                    // 错误处理
                     if (root.TryGetProperty("error", out var error))
                     {
                         AppendSystemMessage($"API Error: {error.GetProperty("message")}");
@@ -196,16 +195,14 @@ namespace GodotAiAssistant
 
                     var choice = root.GetProperty("choices")[0];
                     var message = choice.GetProperty("message");
-                    var finishReason = choice.GetProperty("finish_reason").GetString();
 
-                    // 1. 处理普通回复
+                    // 1. Handle Content
                     string content = message.TryGetProperty("content", out var c) && c.ValueKind != JsonValueKind.Null ? c.GetString() : null;
 
-                    // 将助手的回复加入历史
                     var assistantMsg = new Dictionary<string, object> { ["role"] = "assistant" };
                     if (content != null) assistantMsg["content"] = content;
 
-                    // 2. 处理工具调用
+                    // 2. Handle Tool Calls
                     if (message.TryGetProperty("tool_calls", out var toolCalls))
                     {
                         var toolCallsList = new List<object>();
@@ -217,9 +214,11 @@ namespace GodotAiAssistant
                         _chatHistory.Add(assistantMsg);
 
                         if (content != null) AppendMessage("AI", content);
-                        AppendSystemMessage("Processing tools...");
 
-                        // 执行工具
+                        // REMOVED: AppendSystemMessage("Processing tools...");
+                        // ADDED: Detailed logging inside loop
+
+                        // Execute Tools
                         foreach (var tc in toolCalls.EnumerateArray())
                         {
                             string id = tc.GetProperty("id").GetString();
@@ -227,7 +226,22 @@ namespace GodotAiAssistant
                             string funcName = func.GetProperty("name").GetString();
                             string argsJson = func.GetProperty("arguments").GetString();
 
+                            // ------------------------------------------
+                            // [MODIFIED] Display Tool Info
+                            // ------------------------------------------
+                            AppendSystemMessage($"🛠 [b]Calling Tool:[/b] [color=#88C0D0]{funcName}[/color]\nArguments: [color=#D8DEE9]{argsJson}[/color]");
+
+                            // Yield briefly to let UI update so user sees the tool call happening immediately
+                            await Task.Delay(10);
+
                             string result = ExecuteTool(funcName, argsJson);
+
+                            // ------------------------------------------
+                            // [MODIFIED] Display Result Summary (Optional)
+                            // ------------------------------------------
+                            // Truncate result if it's too long to keep chat clean
+                            string resultPreview = result.Length > 150 ? result.Substring(0, 150) + "..." : result;
+                            AppendSystemMessage($"✅ [b]Result:[/b] [color=#A3BE8C]{resultPreview}[/color]");
 
                             _chatHistory.Add(new
                             {
@@ -239,6 +253,7 @@ namespace GodotAiAssistant
                     }
                     else
                     {
+                        // No tool calls, just text
                         if (content != null) AppendMessage("AI", content);
                         _chatHistory.Add(assistantMsg);
                         keepGoing = false;
@@ -253,6 +268,9 @@ namespace GodotAiAssistant
                 }
             }
         }
+        // ==========================================
+        // KEY MODIFICATIONS END HERE
+        // ==========================================
 
         private string ExecuteTool(string name, string jsonArgs)
         {
@@ -261,39 +279,31 @@ namespace GodotAiAssistant
                 using var doc = JsonDocument.Parse(jsonArgs);
                 var root = doc.RootElement;
 
+                // Simple helper to safely get string property
+                string GetArg(string key) => root.TryGetProperty(key, out var p) ? p.ToString() : "";
+
                 switch (name)
                 {
                     case "list_directory":
-                        string p1 = root.GetProperty("path").GetString();
-                        return AiTools.ListDirectory(p1);
+                        return AiTools.ListDirectory(GetArg("path"));
                     case "read_file":
-                        string p2 = root.GetProperty("path").GetString();
-                        return AiTools.ReadFile(p2);
+                        return AiTools.ReadFile(GetArg("path"));
                     case "search_files":
-                        string p3 = root.GetProperty("keyword").GetString();
-                        return AiTools.SearchFiles(p3);
+                        return AiTools.SearchFiles(GetArg("keyword"));
                     case "get_scene_tree":
-                        string id1 = root.GetProperty("node_id").ToString();
-                        return AiTools.GetSceneTree(id1);
+                        return AiTools.GetSceneTree(GetArg("node_id"));
                     case "get_node_properties":
-                        string id2 = root.GetProperty("node_id").ToString();
-                        return AiTools.GetNodeProperties(id2);
+                        return AiTools.GetNodeProperties(GetArg("node_id"));
                     case "get_selected_nodes":
                         return AiTools.GetSelectedNodes();
                     case "get_node_properties_by_path":
-                        string path = root.GetProperty("path").GetString();
-                        return AiTools.GetNodePropertiesByPath(path);
+                        return AiTools.GetNodePropertiesByPath(GetArg("path"));
                     case "get_node_property_value":
-                        string nPath = root.GetProperty("node_path").GetString();
-                        string pPath = root.GetProperty("property_path").GetString();
-                        return AiTools.GetNodePropertyValue(nPath, pPath);
+                        return AiTools.GetNodePropertyValue(GetArg("node_path"), GetArg("property_path"));
                     case "create_file":
-                        string filePath = root.GetProperty("path").GetString();
-                        string content = root.GetProperty("content").GetString();
-                        return AiTools.CreateFile(filePath, content);
+                        return AiTools.CreateFile(GetArg("path"), GetArg("content"));
                     case "run_gdscript":
-                        string code = root.GetProperty("code").GetString();
-                        return AiTools.RunGdScript(code);
+                        return AiTools.RunGdScript(GetArg("code"));
                     default:
                         return "Error: Unknown tool.";
                 }
@@ -331,7 +341,8 @@ namespace GodotAiAssistant
 
         private void AppendSystemMessage(string text)
         {
-            _chatDisplay.AppendText($"[i][color=#d08770]{text}[/color][/i]\n\n");
+            // Modified color to be a bit more subtle for system logs
+            _chatDisplay.AppendText($"[font_size=12][i][color=#d08770]{text}[/color][/i][/font_size]\n");
         }
     }
 }
