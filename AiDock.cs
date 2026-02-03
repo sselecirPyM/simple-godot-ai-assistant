@@ -287,6 +287,13 @@ namespace GodotAiAssistant
                         string nPath = root.GetProperty("node_path").GetString();
                         string pPath = root.GetProperty("property_path").GetString();
                         return AiTools.GetNodePropertyValue(nPath, pPath);
+                    case "create_file":
+                        string filePath = root.GetProperty("path").GetString();
+                        string content = root.GetProperty("content").GetString();
+                        return AiTools.CreateFile(filePath, content);
+                    case "run_gdscript":
+                        string code = root.GetProperty("code").GetString();
+                        return AiTools.RunGdScript(code);
                     default:
                         return "Error: Unknown tool.";
                 }

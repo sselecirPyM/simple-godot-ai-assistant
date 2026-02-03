@@ -124,6 +124,37 @@ namespace GodotAiAssistant
                             required = new[] { "node_path", "property_path" }
                         }
                     }
+                },
+                new {
+                    type = "function",
+                    function = new {
+                        name = "create_file",
+                        description = "Create or overwrite a text file (e.g., .gd, .cs, .tscn, .txt) at a specific path. Please check the directory before using this tool to ensure that files are not accidentally overwritten.",
+                        parameters = new {
+                            type = "object",
+                            properties = new {
+                                path = new { type = "string", description = "The full path (e.g., 'res://scripts/my_script.gd')." },
+                                content = new { type = "string", description = "The text content to write into the file." }
+                            },
+                            required = new[] { "path", "content" }
+                        }
+                    }
+                },
+                new {
+                    type = "function",
+                    function = new {
+                        name = "run_gdscript",
+                        description = "Execute a temporary GDScript snippet immediately and return the result. " +
+                                      "The script MUST contain a 'func run():' method which returns a value (String, Dictionary, or basic type). " +
+                                      "Use this to perform complex calculations, inspect deep scene state, or perform batch editor operations. The \"tool\" keyword was removed in Godot 4. Use the \"@tool\" annotation instead.",
+                        parameters = new {
+                            type = "object",
+                            properties = new {
+                                code = new { type = "string", description = "The full GDScript code. It must extend a class (default RefCounted) and implement 'func run()'." }
+                            },
+                            required = new[] { "code" }
+                        }
+                    }
                 }
             };
         }
@@ -285,76 +316,14 @@ namespace GodotAiAssistant
 
             if (targetNode == null) return $"Error: Could not find node at path '{path}'.";
 
-            return SerializeNodeData(targetNode);
+            return SerializeGodotObject(targetNode);
         }
         public static string GetNodeProperties(string nodeIdStr)
         {
             var node = GetNodeFromId(nodeIdStr);
             if (node == null) return "Error: Could not find node with that ID.";
 
-            return SerializeNodeData(node);
-        }
-
-        private static string SerializeNodeData(Node node)
-        {
-            var propDict = new Dictionary<string, object>();
-
-            propDict["_Info_"] = new
-            {
-                Name = node.Name,
-                Class = node.GetType().Name,
-                InstanceId = node.GetInstanceId().ToString(),
-                Path = node.GetPath().ToString()
-            };
-
-            // 处理常用的变换属性，使其更易读
-            if (node is Node2D n2d)
-            {
-                propDict["GlobalPosition"] = n2d.GlobalPosition.ToString();
-                propDict["Position"] = n2d.Position.ToString();
-                propDict["RotationDegrees"] = n2d.RotationDegrees;
-            }
-            else if (node is Node3D n3d)
-            {
-                propDict["GlobalPosition"] = n3d.GlobalPosition.ToString();
-                propDict["Position"] = n3d.Position.ToString();
-                propDict["RotationDegrees"] = n3d.RotationDegrees.ToString();
-            }
-
-            var properties = node.GetPropertyList();
-
-            foreach (var prop in properties)
-            {
-                string name = prop["name"].AsString();
-                int usage = prop["usage"].AsInt32();
-
-                bool isScriptVar = (usage & (int)PropertyUsageFlags.ScriptVariable) != 0;
-                bool isStorage = (usage & (int)PropertyUsageFlags.Storage) != 0;
-                bool isEditor = (usage & (int)PropertyUsageFlags.Editor) != 0;
-
-                // 我们主要关注脚本变量和在编辑器中可见的存储变量
-                if (!isScriptVar && !isStorage && !isEditor) continue;
-
-                if (name.StartsWith("metadata/") || name.Contains("script/source")) continue;
-
-                try
-                {
-                    Variant val = node.Get(name);
-
-                    string valStr = val.Obj?.ToString() ?? val.ToString();
-
-                    // 如果属性值太长（例如巨大的数组或Mesh数据），截断它以节省上下文
-                    if (valStr.Length > 200) valStr = valStr.Substring(0, 200) + "...(truncated)";
-
-                    propDict[name] = valStr;
-                }
-                catch (Exception)
-                {
-                    propDict[name] = "<Error reading property>";
-                }
-            }
-
-            return JsonSerializer.Serialize(propDict, new JsonSerializerOptions { WriteIndented = true });
+            return SerializeGodotObject(node);
         }
 
         public static string GetNodePropertyValue(string nodePath, string propertyPath)
@@ -480,6 +449,109 @@ namespace GodotAiAssistant
             }
 
             return JsonSerializer.Serialize(propDict, new JsonSerializerOptions { WriteIndented = true });
+        }
+
+        public static string CreateFile(string path, string content)
+        {
+            try
+            {
+                // 1. Ensure the directory exists
+                string dir = path.GetBaseDir();
+                using var dirAccess = DirAccess.Open("res://");
+
+                if (dirAccess == null)
+                    return "Error: Cannot access res:// directory.";
+
+                if (!dirAccess.DirExists(dir))
+                {
+                    Error err = dirAccess.MakeDirRecursive(dir);
+                    if (err != Error.Ok) return $"Error creating directory '{dir}': {err}";
+                }
+
+                // 2. Write the file
+                using var file = FileAccess.Open(path, FileAccess.ModeFlags.Write);
+                if (file == null)
+                {
+                    return $"Error: Could not open file '{path}' for writing. Error code: {FileAccess.GetOpenError()}";
+                }
+
+                file.StoreString(content);
+                file.Flush(); // Ensure write
+
+                // 3. Trigger Editor Refresh
+                CallDeferredRefresh();
+
+                return $"Success: File created/overwritten at '{path}'.";
+            }
+            catch (Exception ex)
+            {
+                return $"Exception creating file: {ex.Message}";
+            }
+        }
+
+        private static void CallDeferredRefresh()
+        {
+            // We run this on the main thread to ensure the EditorFileSystem updates safely
+            var editorInterface = EditorInterface.Singleton;
+            if (editorInterface != null)
+            {
+                editorInterface.GetResourceFilesystem().Scan();
+            }
+        }
+
+        public static string RunGdScript(string code)
+        {
+            try
+            {
+                using var script = new GDScript();
+                script.SourceCode = code;
+
+                Error err = script.Reload();
+                if (err != Error.Ok)
+                {
+                    return $"GDScript Syntax Error: {err}. Please check your code.";
+                }
+
+                GodotObject instance;
+                try
+                {
+                    if (script.CanInstantiate())
+                    {
+                        instance = (GodotObject)script.New();
+                    }
+                    else
+                    {
+                        return "Error: Script cannot be instantiated. Ensure it extends a valid class (e.g., RefCounted, Node) or implicitly defaults to RefCounted.";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return $"Instantiation Error: {ex.Message}";
+                }
+
+                if (!instance.HasMethod("run"))
+                {
+                    return "Error: The provided GDScript does not contain a 'func run():' method.";
+                }
+
+                Variant result = instance.Call("run");
+
+                if (instance is Node node && !node.IsInsideTree())
+                {
+                    node.QueueFree();
+                }
+
+                if (result.Obj is GodotObject resObj)
+                {
+                    return $"[Object: {resObj.GetType().Name} ID:{resObj.GetInstanceId()}]";
+                }
+
+                return result.ToString();
+            }
+            catch (Exception ex)
+            {
+                return $"Runtime Error executing GDScript: {ex.Message}";
+            }
         }
     }
 }
