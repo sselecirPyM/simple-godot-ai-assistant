@@ -278,6 +278,11 @@ namespace GodotAiAssistant
                     case "get_node_properties":
                         string id2 = root.GetProperty("node_id").ToString();
                         return AiTools.GetNodeProperties(id2);
+                    case "get_selected_nodes":
+                        return AiTools.GetSelectedNodes();
+                    case "get_node_properties_by_path":
+                        string path = root.GetProperty("path").GetString();
+                        return AiTools.GetNodePropertiesByPath(path);
                     default:
                         return "Error: Unknown tool.";
                 }
