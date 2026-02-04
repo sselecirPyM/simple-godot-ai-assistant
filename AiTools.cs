@@ -69,7 +69,7 @@ namespace GodotAiAssistant
                         parameters = new {
                             type = "object",
                             properties = new {
-                                node_id = new { type = "string", description = "The Instance ID of the node to inspect. Pass '0' to get the entire current scene root." }
+                                node_id = new { type = "string", description = "The Instance ID of the node to inspect. Pass '0' to get the children of current scene root." }
                             },
                             required = new[] { "node_id" }
                         }
