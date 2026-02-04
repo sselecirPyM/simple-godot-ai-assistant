@@ -96,7 +96,12 @@ namespace GodotAiAssistant
 
             // --- Input Area ---
             var inputContainer = new HBoxContainer { CustomMinimumSize = new Vector2(0, 100) };
-            _inputBox = new TextEdit { SizeFlagsHorizontal = SizeFlags.ExpandFill };
+            _inputBox = new TextEdit
+            {
+                SizeFlagsHorizontal = SizeFlags.ExpandFill,
+                AutowrapMode = TextServer.AutowrapMode.Word,
+                WrapMode = TextEdit.LineWrappingMode.Boundary
+            };
 
             _sendBtn = new Button { Text = "Send" };
             _sendBtn.Pressed += OnSendPressed;
@@ -167,7 +172,6 @@ namespace GodotAiAssistant
 
             if (toggledOn)
             {
-                // 打开时刷新显示的数据
                 _urlEdit.Text = _config.Endpoint;
                 _keyEdit.Text = _config.ApiKey;
                 _modelEdit.Text = _config.Model;
@@ -178,11 +182,9 @@ namespace GodotAiAssistant
         {
             if (_contextLabel == null) return;
 
-            // 显示格式：Total (Input + Output)
             _contextLabel.Text = $"Tokens: {totalTokens} (In: {promptTokens} / Out: {completionTokens})";
 
-            // 简单的颜色警示 (根据 Total Tokens)
-            if (totalTokens > 12000) _contextLabel.Modulate = Colors.Red;
+            if (totalTokens > 16000) _contextLabel.Modulate = Colors.Red;
             else if (totalTokens > 8000) _contextLabel.Modulate = Colors.Yellow;
             else _contextLabel.Modulate = new Color(0.7f, 0.7f, 0.7f);
         }
@@ -196,7 +198,6 @@ namespace GodotAiAssistant
 
             AppendSystemMessage("Settings saved.");
 
-            // 保存后关闭设置面板，并弹起 Settings 按钮
             _settingsPanel.Visible = false;
             _settingsBtn.ButtonPressed = false;
         }
@@ -216,7 +217,6 @@ namespace GodotAiAssistant
             AppendMessage("User", text);
 
             _chatHistory.Add(new { role = "user", content = text });
-            // 注意：这里不再调用 UpdateContextCount，因为我们等待 API 返回准确值
 
             _sendBtn.Disabled = true;
             _stopBtn.Visible = true;
@@ -272,7 +272,6 @@ namespace GodotAiAssistant
                         int cTokens = usage.TryGetProperty("completion_tokens", out var c) ? c.GetInt32() : 0;
                         int tTokens = usage.TryGetProperty("total_tokens", out var t) ? t.GetInt32() : 0;
 
-                        // 更新 UI 显示
                         UpdateTokenDisplay(pTokens, cTokens, tTokens);
                     }
 
@@ -282,8 +281,27 @@ namespace GodotAiAssistant
                     // 1. Handle Content
                     string content = message.TryGetProperty("content", out var cVal) && cVal.ValueKind != JsonValueKind.Null ? cVal.GetString() : null;
 
+                    // 1.5 Handle Reasoning/Chain of Thought
+                    string reasoning = null;
+                    if (message.TryGetProperty("reasoning_content", out var rVal) && rVal.ValueKind != JsonValueKind.Null)
+                    {
+                        reasoning = rVal.GetString();
+                    }
+                    else if (message.TryGetProperty("reasoning", out var rVal2) && rVal2.ValueKind != JsonValueKind.Null)
+                    {
+                        reasoning = rVal2.GetString();
+                    }
+
                     var assistantMsg = new Dictionary<string, object> { ["role"] = "assistant" };
+
                     if (content != null) assistantMsg["content"] = content;
+
+                    if (!string.IsNullOrEmpty(reasoning))
+                    {
+                        assistantMsg["reasoning_content"] = reasoning;
+
+                        AppendSystemMessage($"🧠 Received reasoning ({reasoning.Length} chars)");
+                    }
 
                     // 2. Handle Tool Calls
                     if (message.TryGetProperty("tool_calls", out var toolCalls))
@@ -322,12 +340,13 @@ namespace GodotAiAssistant
                                 content = result
                             });
                         }
-                        // 工具执行完毕，循环继续，将发送新的请求，届时会获得最新的 Token 计数
+                        // 工具执行完毕，循环继续
                     }
                     else
                     {
                         // No tool calls, just text
                         if (content != null) AppendMessage("AI", content);
+
                         _chatHistory.Add(assistantMsg);
                         keepGoing = false;
                     }

@@ -426,7 +426,7 @@ namespace GodotAiAssistant
 
                 if (!isScriptVar && !isStorage && !isEditor) continue;
                 if (name.StartsWith("metadata/") || name.Contains("script/source")) continue;
-                if (name.EndsWith(".cs")) continue; // 忽略 C# 脚本自身引用
+                if (name.EndsWith(".cs")) continue;
 
                 try
                 {
@@ -464,12 +464,10 @@ namespace GodotAiAssistant
         {
             try
             {
-                // 1. Ensure the directory exists
+                // 1. 确保目录存在
                 string dir = path.GetBaseDir();
                 using var dirAccess = DirAccess.Open("res://");
-
-                if (dirAccess == null)
-                    return "Error: Cannot access res:// directory.";
+                if (dirAccess == null) return "Error: Cannot access res:// directory.";
 
                 if (!dirAccess.DirExists(dir))
                 {
@@ -477,20 +475,25 @@ namespace GodotAiAssistant
                     if (err != Error.Ok) return $"Error creating directory '{dir}': {err}";
                 }
 
-                // 2. Write the file
-                using var file = FileAccess.Open(path, FileAccess.ModeFlags.Write);
-                if (file == null)
+                bool isShader = path.GetExtension().ToLower() == "gdshader";
+
+                if (isShader)
                 {
-                    return $"Error: Could not open file '{path}' for writing. Error code: {FileAccess.GetOpenError()}";
+                    // 如果是着色器，使用 Shader 资源更新逻辑来强制刷新编辑器缓存
+                    return UpdateShaderWithCacheBypass(path, content);
                 }
+                else
+                {
+                    // 普通文件写入逻辑
+                    using var file = FileAccess.Open(path, FileAccess.ModeFlags.Write);
+                    if (file == null) return $"Error: Could not open file '{path}' for writing.";
+                    file.StoreString(content);
+                    file.Flush();
+                    file.Close();
 
-                file.StoreString(content);
-                file.Flush();
-                file.Close();
-                // 3. Trigger Editor Refresh
-                CallDeferredRefresh();
-
-                return $"Success: File created/overwritten at '{path}'.";
+                    CallDeferredRefresh();
+                    return $"Success: File created/overwritten at '{path}'.";
+                }
             }
             catch (Exception ex)
             {
@@ -498,12 +501,37 @@ namespace GodotAiAssistant
             }
         }
 
+        private static string UpdateShaderWithCacheBypass(string path, string content)
+        {
+            if (!FileAccess.FileExists(path))
+            {
+                using var f = FileAccess.Open(path, FileAccess.ModeFlags.Write);
+                f.StoreString("");
+            }
+
+            var shader = ResourceLoader.Load<Shader>(path, "Shader", ResourceLoader.CacheMode.IgnoreDeep);
+            if (shader == null) return "Error: Could not load shader resource.";
+
+            shader.Code = content;
+            Error saveErr = ResourceSaver.Save(shader, path);
+            if (saveErr != Error.Ok) return $"Error saving shader resource: {saveErr}";
+
+            var fsDock = EditorInterface.Singleton.GetFileSystemDock();
+            fsDock.EmitSignal("file_removed", path);
+
+            var fs = EditorInterface.Singleton.GetResourceFilesystem();
+            fs.ReimportFiles(new string[] { path });
+
+            EditorInterface.Singleton.CallDeferred(EditorInterface.MethodName.EditResource, ResourceLoader.Load(path));
+
+            return $"Success: Shader updated and synchronized at '{path}'.";
+        }
+
         private static void CallDeferredRefresh()
         {
-            var editorInterface = EditorInterface.Singleton;
-            if (editorInterface != null)
+            if (EditorInterface.Singleton != null)
             {
-                editorInterface.GetResourceFilesystem().Scan();
+                EditorInterface.Singleton.GetResourceFilesystem().Scan();
             }
         }
 
