@@ -21,9 +21,11 @@ namespace GodotAiAssistant
         private Button _settingsBtn;
 
         private PanelContainer _settingsPanel;
-
-        // 用于显示 Token 计数的 Label
         private Label _contextLabel;
+
+        private Label _imageStatusLabel;
+        private Button _clearImageBtn;
+        private HBoxContainer _imageStatusContainer;
 
         // Settings UI
         private LineEdit _urlEdit, _keyEdit, _modelEdit;
@@ -34,6 +36,8 @@ namespace GodotAiAssistant
 
         private CancellationTokenSource _cancellationTokenSource;
 
+        private string _pendingImageBase64 = null;
+
         public override void _Ready()
         {
             _config = ConfigManager.LoadConfig();
@@ -42,10 +46,8 @@ namespace GodotAiAssistant
 
         private void SetupUi()
         {
-            // Clean up children if reloading
             foreach (Node child in GetChildren()) child.QueueFree();
 
-            // Layout
             _mainLayout = new VBoxContainer { LayoutMode = 1, AnchorsPreset = (int)LayoutPreset.FullRect };
             AddChild(_mainLayout);
 
@@ -60,15 +62,14 @@ namespace GodotAiAssistant
             {
                 _chatHistory.Clear();
                 _chatDisplay.Text = "";
+                ClearPendingImage();
                 if (_contextLabel != null) _contextLabel.Text = "Tokens: 0";
             };
             toolBar.AddChild(clearBtn);
 
-            // 占位符
             var spacer = new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill };
             toolBar.AddChild(spacer);
 
-            // 上下文长度显示
             _contextLabel = new Label
             {
                 Text = "Tokens: 0",
@@ -94,6 +95,20 @@ namespace GodotAiAssistant
             };
             _mainLayout.AddChild(_chatDisplay);
 
+            _imageStatusContainer = new HBoxContainer { Visible = false };
+            _imageStatusLabel = new Label
+            {
+                Text = "🖼 Image attached from clipboard",
+                Modulate = Colors.LightGreen,
+                SizeFlagsHorizontal = SizeFlags.ExpandFill
+            };
+            _clearImageBtn = new Button { Text = "x", Flat = true };
+            _clearImageBtn.Pressed += ClearPendingImage;
+
+            _imageStatusContainer.AddChild(_imageStatusLabel);
+            _imageStatusContainer.AddChild(_clearImageBtn);
+            _mainLayout.AddChild(_imageStatusContainer);
+
             // --- Input Area ---
             var inputContainer = new HBoxContainer { CustomMinimumSize = new Vector2(0, 100) };
             _inputBox = new TextEdit
@@ -102,6 +117,7 @@ namespace GodotAiAssistant
                 AutowrapMode = TextServer.AutowrapMode.Word,
                 WrapMode = TextEdit.LineWrappingMode.Boundary
             };
+            _inputBox.GuiInput += OnInputBoxGuiInput;
 
             _sendBtn = new Button { Text = "Send" };
             _sendBtn.Pressed += OnSendPressed;
@@ -114,18 +130,51 @@ namespace GodotAiAssistant
             inputContainer.AddChild(_stopBtn);
             _mainLayout.AddChild(inputContainer);
 
-            AppendSystemMessage("AI Assistant Ready. Configure settings to start.");
+            AppendSystemMessage("AI Assistant Ready. Configure settings to start. Paste images directly.");
         }
+
+        private void OnInputBoxGuiInput(InputEvent @event)
+        {
+            if (@event is InputEventKey keyEvent && keyEvent.Pressed)
+            {
+                // 检测 Ctrl+V (macOS 检测 Meta+V)
+                if (keyEvent.Keycode == Key.V && (keyEvent.CtrlPressed || keyEvent.MetaPressed))
+                {
+                    if (DisplayServer.ClipboardHasImage())
+                    {
+                        var img = DisplayServer.ClipboardGetImage();
+                        if (img != null)
+                        {
+                            // 将图片转换为 PNG 字节，再转 Base64
+                            byte[] pngBuffer = img.SavePngToBuffer();
+                            _pendingImageBase64 = Convert.ToBase64String(pngBuffer);
+
+                            // 更新 UI 状态
+                            _imageStatusContainer.Visible = true;
+                            AppendSystemMessage("Captured image from clipboard.");
+
+                            // 标记事件已处理，防止 TextEdit 尝试粘贴非文本数据（虽然 Godot 通常会忽略）
+                            GetViewport().SetInputAsHandled();
+                        }
+                    }
+                }
+            }
+        }
+
+        private void ClearPendingImage()
+        {
+            _pendingImageBase64 = null;
+            _imageStatusContainer.Visible = false;
+        }
+
         private void CreateSettingsPanel()
         {
-            // 1. 最外层面板
             _settingsPanel = new PanelContainer
             {
                 Visible = false,
                 SizeFlagsHorizontal = SizeFlags.ExpandFill
             };
 
-            // 2. 边距容器
             var marginContainer = new MarginContainer();
             marginContainer.AddThemeConstantOverride("margin_top", 10);
             marginContainer.AddThemeConstantOverride("margin_bottom", 10);
@@ -133,31 +182,25 @@ namespace GodotAiAssistant
             marginContainer.AddThemeConstantOverride("margin_right", 10);
             _settingsPanel.AddChild(marginContainer);
 
-            // 3. 垂直布局容器
             var contentLayout = new VBoxContainer();
             marginContainer.AddChild(contentLayout);
 
-            // 4. 输入框区域
             var grid = new GridContainer { Columns = 2 };
             grid.SizeFlagsHorizontal = SizeFlags.ExpandFill;
 
-            // Endpoint
             grid.AddChild(new Label { Text = "Endpoint URL:" });
             _urlEdit = new LineEdit { Text = _config.Endpoint, SizeFlagsHorizontal = SizeFlags.ExpandFill };
             grid.AddChild(_urlEdit);
 
-            // API Key
             grid.AddChild(new Label { Text = "API Key:" });
             _keyEdit = new LineEdit { Text = _config.ApiKey, Secret = true, SizeFlagsHorizontal = SizeFlags.ExpandFill };
             grid.AddChild(_keyEdit);
 
-            // Model
             grid.AddChild(new Label { Text = "Model Name:" });
             _modelEdit = new LineEdit { Text = _config.Model, SizeFlagsHorizontal = SizeFlags.ExpandFill };
             grid.AddChild(_modelEdit);
 
             contentLayout.AddChild(grid);
-
             contentLayout.AddChild(new Control { CustomMinimumSize = new Vector2(0, 10) });
 
             var saveBtn = new Button { Text = "Save Settings & Close", CustomMinimumSize = new Vector2(0, 30) };
@@ -169,7 +212,6 @@ namespace GodotAiAssistant
         private void OnSettingsToggled(bool toggledOn)
         {
             _settingsPanel.Visible = toggledOn;
-
             if (toggledOn)
             {
                 _urlEdit.Text = _config.Endpoint;
@@ -181,9 +223,7 @@ namespace GodotAiAssistant
         private void UpdateTokenDisplay(int promptTokens, int completionTokens, int totalTokens)
         {
             if (_contextLabel == null) return;
-
             _contextLabel.Text = $"Tokens: {totalTokens} (In: {promptTokens} / Out: {completionTokens})";
-
             if (totalTokens > 16000) _contextLabel.Modulate = Colors.Red;
             else if (totalTokens > 8000) _contextLabel.Modulate = Colors.Yellow;
             else _contextLabel.Modulate = new Color(0.7f, 0.7f, 0.7f);
@@ -195,9 +235,7 @@ namespace GodotAiAssistant
             _config.ApiKey = _keyEdit.Text;
             _config.Model = _modelEdit.Text;
             ConfigManager.SaveConfig(_config);
-
             AppendSystemMessage("Settings saved.");
-
             _settingsPanel.Visible = false;
             _settingsBtn.ButtonPressed = false;
         }
@@ -211,12 +249,54 @@ namespace GodotAiAssistant
         private async void OnSendPressed()
         {
             string text = _inputBox.Text.Trim();
-            if (string.IsNullOrEmpty(text) || !_sendBtn.Disabled == false) return;
+
+            // [修改] 只有当文本为空 且 图片也为空时才返回
+            if ((string.IsNullOrEmpty(text) && string.IsNullOrEmpty(_pendingImageBase64)) || !_sendBtn.Disabled == false) return;
 
             _inputBox.Text = "";
-            AppendMessage("User", text);
 
-            _chatHistory.Add(new { role = "user", content = text });
+            // [修改] UI 显示反馈：如果有图片，提示 [Image]
+            string displayMsg = text;
+            if (!string.IsNullOrEmpty(_pendingImageBase64))
+            {
+                displayMsg += "\n[i][color=#8FBCBB](Attached Image)[/color][/i]";
+            }
+            AppendMessage("User", displayMsg);
+
+            // --- [修改] 构建消息体 ---
+            object messageContent;
+
+            if (!string.IsNullOrEmpty(_pendingImageBase64))
+            {
+                // 如果有图片，按照 OpenAI Vision API 格式构建 content 数组
+                var contentList = new List<object>();
+
+                // 1. 添加文字 (如果存在)
+                if (!string.IsNullOrEmpty(text))
+                {
+                    contentList.Add(new { type = "text", text = text });
+                }
+
+                // 2. 添加图片
+                contentList.Add(new
+                {
+                    type = "image_url",
+                    image_url = new { url = $"data:image/png;base64,{_pendingImageBase64}" }
+                });
+
+                messageContent = contentList;
+
+                // 发送后清除图片缓存
+                ClearPendingImage();
+            }
+            else
+            {
+                // 纯文本
+                messageContent = text;
+            }
+
+            _chatHistory.Add(new { role = "user", content = messageContent });
+            // ------------------------
 
             _sendBtn.Disabled = true;
             _stopBtn.Visible = true;
@@ -238,8 +318,11 @@ namespace GodotAiAssistant
             {
                 _sendBtn.Disabled = false;
                 _stopBtn.Visible = false;
-                _cancellationTokenSource.Dispose();
-                _cancellationTokenSource = null;
+                if (_cancellationTokenSource != null)
+                {
+                    _cancellationTokenSource.Dispose();
+                    _cancellationTokenSource = null;
+                }
             }
         }
 
@@ -271,17 +354,14 @@ namespace GodotAiAssistant
                         int pTokens = usage.TryGetProperty("prompt_tokens", out var p) ? p.GetInt32() : 0;
                         int cTokens = usage.TryGetProperty("completion_tokens", out var c) ? c.GetInt32() : 0;
                         int tTokens = usage.TryGetProperty("total_tokens", out var t) ? t.GetInt32() : 0;
-
                         UpdateTokenDisplay(pTokens, cTokens, tTokens);
                     }
 
                     var choice = root.GetProperty("choices")[0];
                     var message = choice.GetProperty("message");
 
-                    // 1. Handle Content
                     string content = message.TryGetProperty("content", out var cVal) && cVal.ValueKind != JsonValueKind.Null ? cVal.GetString() : null;
 
-                    // 1.5 Handle Reasoning/Chain of Thought
                     string reasoning = null;
                     if (message.TryGetProperty("reasoning_content", out var rVal) && rVal.ValueKind != JsonValueKind.Null)
                     {
@@ -299,11 +379,9 @@ namespace GodotAiAssistant
                     if (!string.IsNullOrEmpty(reasoning))
                     {
                         assistantMsg["reasoning_content"] = reasoning;
-
                         AppendSystemMessage($"🧠 Received reasoning ({reasoning.Length} chars)");
                     }
 
-                    // 2. Handle Tool Calls
                     if (message.TryGetProperty("tool_calls", out var toolCalls))
                     {
                         var toolCallsList = new List<object>();
@@ -316,7 +394,6 @@ namespace GodotAiAssistant
 
                         if (content != null) AppendMessage("AI", content);
 
-                        // Execute Tools
                         foreach (var tc in toolCalls.EnumerateArray())
                         {
                             string id = tc.GetProperty("id").GetString();
@@ -326,7 +403,7 @@ namespace GodotAiAssistant
 
                             AppendSystemMessage($"🛠 [b]Calling Tool:[/b] [color=#88C0D0]{funcName}[/color]\nArguments: [color=#D8DEE9]{argsJson}[/color]");
 
-                            await Task.Delay(10); // UI Refresh
+                            await Task.Delay(10);
 
                             string result = ExecuteTool(funcName, argsJson);
 
@@ -340,13 +417,10 @@ namespace GodotAiAssistant
                                 content = result
                             });
                         }
-                        // 工具执行完毕，循环继续
                     }
                     else
                     {
-                        // No tool calls, just text
                         if (content != null) AppendMessage("AI", content);
-
                         _chatHistory.Add(assistantMsg);
                         keepGoing = false;
                     }
@@ -354,7 +428,6 @@ namespace GodotAiAssistant
                 catch (Exception ex)
                 {
                     if (ex is OperationCanceledException) throw;
-
                     AppendSystemMessage($"Exception: {ex.Message}");
                     keepGoing = false;
                 }
@@ -380,8 +453,8 @@ namespace GodotAiAssistant
                         return AiTools.SearchFiles(GetArg("keyword"));
                     case "get_scene_tree":
                         return AiTools.GetSceneTree(GetArg("node_id"));
-                    case "get_node_properties":
-                        return AiTools.GetNodeProperties(GetArg("node_id"));
+                    case "get_object_properties":
+                        return AiTools.GetObjectProperties(GetArg("object_id"));
                     case "get_selected_nodes":
                         return AiTools.GetSelectedNodes();
                     case "get_node_properties_by_path":

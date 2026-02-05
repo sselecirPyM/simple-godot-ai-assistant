@@ -51,7 +51,7 @@ namespace GodotAiAssistant
                     type = "function",
                     function = new {
                         name = "search_files",
-                        description = "Search for files containing a specific name keyword.",
+                        description = "Search for files where the filename contains a specific name keyword.",
                         parameters = new {
                             type = "object",
                             properties = new {
@@ -78,23 +78,23 @@ namespace GodotAiAssistant
                 new {
                     type = "function",
                     function = new {
-                        name = "get_node_properties",
-                        description = "Get the properties of a specific node by its Instance ID.",
-                        parameters = new {
-                            type = "object",
-                            properties = new {
-                                node_id = new { type = "string", description = "The Instance ID of the node." }
-                            },
-                            required = new[] { "node_id" }
-                        }
+                        name = "get_selected_nodes",
+                        description = "Get the list of nodes currently selected in the Godot Editor. Returns Name, NodePath, Class, and ID.",
+                        parameters = new { type = "object", properties = new { } }
                     }
                 },
                 new {
                     type = "function",
                     function = new {
-                        name = "get_selected_nodes",
-                        description = "Get the list of nodes currently selected in the Godot Editor. Returns Name, NodePath, Class, and ID.",
-                        parameters = new { type = "object", properties = new { } } // No parameters needed
+                        name = "get_object_properties", 
+                        description = "Get the properties of a specific object (Node or Resource) by its Instance ID.",
+                        parameters = new {
+                            type = "object",
+                            properties = new {
+                                object_id = new { type = "string", description = "The Instance ID of the object." }
+                            },
+                            required = new[] { "object_id" }
+                        }
                     }
                 },
                 new {
@@ -131,7 +131,9 @@ namespace GodotAiAssistant
                     type = "function",
                     function = new {
                         name = "create_file",
-                        description = "Create or overwrite a text file (e.g., .gd, .cs, .tscn, .txt) at a specific path. Please check the directory before using this tool to ensure that files are not accidentally overwritten.",
+                        description = "Create or overwrite a text file (e.g., .gd, .cs, .tscn, .txt) at a specific path. " +
+                        "If the directory does not exist, this tool will create it recursively. " +
+                        "Please check the directory before using this tool to ensure that files are not accidentally overwritten.",
                         parameters = new {
                             type = "object",
                             properties = new {
@@ -148,13 +150,13 @@ namespace GodotAiAssistant
                         name = "run_gdscript",
                         description = "Execute a temporary GDScript snippet immediately and return the result. " +
                                       "The script MUST contain a 'func run():' method which returns a value (String, Dictionary, or basic type). " +
-                                      "Use this to perform complex calculations, inspect deep scene state, or perform batch editor operations." +
-                                      "The \"tool\" keyword was removed in Godot 4. Use the \"@tool\" annotation instead." +
+                                      "Use this to perform complex calculations, inspect deep scene state, or perform batch editor operations. " +
+                                      "The \"tool\" keyword was removed in Godot 4. Use the \"@tool\" annotation instead. " +
                                       "Cannot use get_tree(), use EditorInterface.get_edited_scene_root() instead.",
                         parameters = new {
                             type = "object",
                             properties = new {
-                                code = new { type = "string", description = "The full GDScript code. It must extend a class (default RefCounted) and implement 'func run()'." }
+                                code = new { type = "string", description = "The full GDScript code. It must extend a class (e.g., RefCounted) and implement 'func run()'." }
                             },
                             required = new[] { "code" }
                         }
@@ -327,12 +329,18 @@ namespace GodotAiAssistant
 
             return SerializeGodotObject(targetNode);
         }
-        public static string GetNodeProperties(string nodeIdStr)
-        {
-            var node = GetNodeFromId(nodeIdStr);
-            if (node == null) return "Error: Could not find node with that ID.";
 
-            return SerializeGodotObject(node);
+        public static string GetObjectProperties(string objectIdStr)
+        {
+            if (ulong.TryParse(objectIdStr, out ulong instanceId))
+            {
+                var obj = GodotObject.InstanceFromId(instanceId);
+                if (obj == null) return "Error: Could not find object with that ID.";
+
+                return SerializeGodotObject(obj);
+            }
+
+            return "Error: Invalid ID format.";
         }
 
         public static string GetNodePropertyValue(string nodePath, string propertyPath)
