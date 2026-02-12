@@ -104,12 +104,13 @@ static func get_tool_definitions() -> Array[Dictionary]:
 			"type": "function",
 			"function": {
 				"name": "get_node_property_value",
-				"description": "Get a specific property value or sub-resource from a node using a path. Useful for accessing nested resources.",
+				"description": "Get a specific property value or sub-resource from a node using a path. " +
+				"Useful for accessing nested resources like 'mesh/material/albedo_color' or 'surface_material_override/0'.",
 				"parameters": {
 					"type": "object",
 					"properties": {
 						"node_path": { "type": "string", "description": "Path to the scene node (e.g. 'Player/MeshInstance')." },
-						"property_path": { "type": "string", "description": "Path to the property or sub-resource (e.g. 'mesh:material:albedo_color')." }
+						"property_path": { "type": "string", "description": "Path to the property or sub-resource (e.g. 'mesh:material:albedo_color'). Slashes are automatically converted to colons where appropriate." }
 					},
 					"required": ["node_path", "property_path"]
 				}
@@ -119,7 +120,7 @@ static func get_tool_definitions() -> Array[Dictionary]:
 			"type": "function",
 			"function": {
 				"name": "create_file",
-				"description": "Create or overwrite a text file (e.g., .gd, .tscn, .txt) at a specific path. If directory missing, it creates it.",
+				"description": "Create or overwrite a text file (e.g., .gd, .tscn, .txt) at a specific path. If directory missing, it creates it. ",
 				"parameters": {
 					"type": "object",
 					"properties": {
@@ -134,11 +135,14 @@ static func get_tool_definitions() -> Array[Dictionary]:
 			"type": "function",
 			"function": {
 				"name": "run_gdscript",
-				"description": "Execute a temporary GDScript snippet immediately and return the result. The script MUST contain a 'func run():'.",
+				"description": "Execute a temporary GDScript snippet immediately and return the result. " +
+					"The script MUST contain a 'func run():' method which returns a value (String, Dictionary, or basic type). " +
+					"The \"tool\" keyword was removed in Godot 4. Use the \"@tool\" annotation instead. " +
+					"Cannot use get_tree(), use EditorInterface.get_edited_scene_root() instead.",
 				"parameters": {
 					"type": "object",
 					"properties": {
-						"code": { "type": "string", "description": "The full GDScript code. It must extend a class and implement 'func run()'." }
+						"code": { "type": "string", "description": "The full GDScript code. It must extend RefCounted and implement 'func run()'." }
 					},
 					"required": ["code"]
 				}
@@ -382,31 +386,63 @@ static func _serialize_godot_object(obj: Object) -> String:
 # --- File Creation ---
 
 static func create_file(path: String, content: String) -> String:
-	# Ensure directory exists
-	var base_dir = path.get_base_dir()
-	var dir = DirAccess.open("res://")
-	if not dir: return "Error: Cannot access res:// directory."
+	var dir = path.get_base_dir()
+	var dir_access = DirAccess.open("res://")
 	
-	if not dir.dir_exists(base_dir):
-		var err = dir.make_dir_recursive(base_dir)
-		if err != OK: return "Error creating directory '%s': %s" % [base_dir, error_string(err)]
-		
+	if dir_access == null:
+		return "Error: Cannot access res:// directory."
+
+	if not dir_access.dir_exists(dir):
+		var err = dir_access.make_dir_recursive(dir)
+		if err != OK:
+			return "Error creating directory '%s': %s" % [dir, error_string(err)]
+
 	var is_shader = path.get_extension().to_lower() == "gdshader"
-	
-	var file = FileAccess.open(path, FileAccess.WRITE)
-	if not file: return "Error: Could not open file '%s' for writing." % path
-	file.store_string(content)
-	file.close() # Flush and close
-	
-	# Editor Refresh Logic
+
+	if is_shader:
+		return _update_shader_with_cache_bypass(path, content)
+	else:
+		var file = FileAccess.open(path, FileAccess.WRITE)
+		if file == null:
+			return "Error: Could not open file '%s' for writing." % path
+		
+		file.store_string(content)
+		file.flush()
+		file.close()
+
+		_call_deferred_refresh()
+		return "Success: File created/overwritten at '%s'." % path
+
+static func _call_deferred_refresh() -> void:
 	if Engine.is_editor_hint():
-		var fs = EditorInterface.get_resource_filesystem()
-		fs.call_deferred("scan")
-		if is_shader:
-			# For shaders, forcing a reimport can help update the cache immediately
-			fs.reimport_files([path])
-			
-	return "Success: File created/overwritten at '%s'." % path
+		EditorInterface.get_resource_filesystem().call_deferred("scan")
+
+
+static func _update_shader_with_cache_bypass(path: String, content: String) -> String:
+	if not FileAccess.file_exists(path):
+		var f = FileAccess.open(path, FileAccess.WRITE)
+		if f:
+			f.store_string("")
+			f.close()
+
+	var shader = ResourceLoader.load(path, "Shader", ResourceLoader.CACHE_MODE_IGNORE_DEEP) as Shader
+	if shader == null:
+		return "Error: Could not load shader resource."
+
+	shader.code = content
+	var save_err = ResourceSaver.save(shader, path)
+	if save_err != OK:
+		return "Error saving shader resource: %s" % error_string(save_err)
+
+	var fs_dock = EditorInterface.get_file_system_dock()
+	fs_dock.file_removed.emit(path)
+
+	var fs = EditorInterface.get_resource_filesystem()
+	fs.reimport_files([path])
+
+	EditorInterface.edit_resource.call_deferred(load(path))
+
+	return "Success: Shader updated and synchronized at '%s'." % path
 
 # --- Custom Logger for Error Capture (Godot 4.5+) ---
 
@@ -438,6 +474,9 @@ class ErrorCaptureLogger extends Logger:
 static var _error_logger: ErrorCaptureLogger
 
 static func run_gdscript(code: String) -> String:
+	if not code.contains("@tool"):
+		code = "@tool\n" + code
+
 	if not _error_logger:
 		_error_logger = ErrorCaptureLogger.new()
 		OS.add_logger(_error_logger)

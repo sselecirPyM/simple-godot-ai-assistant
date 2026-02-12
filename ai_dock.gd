@@ -207,6 +207,9 @@ func _on_input_gui_input(event: InputEvent):
 func _on_stop_pressed():
 	_stop_requested = true
 	_http_request.cancel_request()
+	
+	_http_request.request_completed.emit(HTTPRequest.RESULT_REQUEST_FAILED, 0, [], PackedByteArray())
+	
 	_is_processing = false
 	_send_btn.disabled = false
 	_stop_btn.visible = false
@@ -266,15 +269,16 @@ func _process_chat_loop():
 		
 		# 1. Send Request
 		var response_dict = await _send_to_api()
-		if not response_dict: 
-			break # Error occurred and was logged in _send_to_api
+		if not response_dict or _stop_requested: 
+			break
 			
-		# 2. Update Token Usage
 		if response_dict.has("usage"):
 			var u = response_dict["usage"]
 			_update_tokens(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("total_tokens", 0))
 			
-		# 3. Process Content
+		if response_dict["choices"].is_empty():
+			break
+			
 		var choice = response_dict["choices"][0]
 		var message = choice["message"]
 		
@@ -285,7 +289,6 @@ func _process_chat_loop():
 		var reasoning = message.get("reasoning_content")
 		if not reasoning: reasoning = message.get("reasoning")
 		
-		# Prepare Assistant Message for history
 		var assistant_msg = { "role": "assistant" }
 		if content != null: assistant_msg["content"] = content
 		if tool_calls: assistant_msg["tool_calls"] = tool_calls
@@ -296,18 +299,20 @@ func _process_chat_loop():
 		if content:
 			_append_message("AI", str(content))
 			
-		# 4. Handle Tool Calls
 		if tool_calls and tool_calls is Array:
 			for tc in tool_calls:
+				if _stop_requested: break
+				
 				var id = tc["id"]
 				var func_def = tc["function"]
 				var func_name = func_def["name"]
 				var args_json = func_def["arguments"]
 				
-				_append_system_message("🛠 Calling Tool: [b]%s[/b]" % func_name)
+				_append_system_message("🛠 [b]Calling Tool:[/b] [color=#88C0D0]%s[/color]\nArguments: [color=#D8DEE9]%s[/color]" % [func_name,args_json])
 				
 				# Small delay to let UI update
 				await get_tree().process_frame
+				if _stop_requested: break # 再次检查，防止在帧等待期间点击停止
 				
 				var result_str = _execute_tool(func_name, args_json)
 				var preview = result_str.substr(0, 150) + "..." if result_str.length() > 150 else result_str
@@ -331,7 +336,8 @@ func _send_to_api() -> Dictionary:
 		"model": _config.get("model", "gpt-4o"),
 		"messages": _chat_history,
 		"tools": AiTools.get_tool_definitions(),
-		"max_tokens": 4096 
+		"reasoning_effort": "high",
+		"max_tokens": 16000
 	}
 	
 	var json_str = JSON.stringify(body)
@@ -341,14 +347,18 @@ func _send_to_api() -> Dictionary:
 		_append_system_message("HTTP Request Failed: " + error_string(err))
 		return {}
 		
-	# Wait for signal
 	var result = await _http_request.request_completed
-	# result = [result, response_code, headers, body]
 	
+	if _stop_requested:
+		return {}
+		
 	var response_code = result[1]
 	var response_body = result[3]
 	
 	if response_code != 200:
+		if response_code == 0 and _stop_requested:
+			return {}
+			
 		var err_txt = response_body.get_string_from_utf8()
 		_append_system_message("API Error (%d): %s" % [response_code, err_txt])
 		return {}
