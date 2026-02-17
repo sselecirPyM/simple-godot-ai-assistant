@@ -292,7 +292,10 @@ func _process_chat_loop():
 		var assistant_msg = { "role": "assistant" }
 		if content != null: assistant_msg["content"] = content
 		if tool_calls: assistant_msg["tool_calls"] = tool_calls
-		if reasoning: _append_system_message("🧠 Reasoning: " + str(reasoning.length()) + " chars")
+		
+		if reasoning: 
+			assistant_msg["reasoning_content"] = reasoning
+			_append_system_message("🧠 Reasoning: " + str(reasoning.length()) + " chars")
 		
 		_chat_history.append(assistant_msg)
 		
@@ -312,7 +315,7 @@ func _process_chat_loop():
 				
 				# Small delay to let UI update
 				await get_tree().process_frame
-				if _stop_requested: break # 再次检查，防止在帧等待期间点击停止
+				if _stop_requested: break
 				
 				var result_str = _execute_tool(func_name, args_json)
 				var preview = result_str.substr(0, 150) + "..." if result_str.length() > 150 else result_str

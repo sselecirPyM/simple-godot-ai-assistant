@@ -400,6 +400,9 @@ static func create_file(path: String, content: String) -> String:
 	var is_shader = path.get_extension().to_lower() == "gdshader"
 
 	if is_shader:
+		if "hint_color" in content:
+			content = content.replace("hint_color", "source_color")
+		
 		return _update_shader_with_cache_bypass(path, content)
 	else:
 		var file = FileAccess.open(path, FileAccess.WRITE)
@@ -469,6 +472,17 @@ class ErrorCaptureLogger extends Logger:
 		if _is_capturing:
 			_log_buffer += "[Line %d]: %s\n" % [line, rationale]
 
+static func smart_add_child(parent: Node, child: Node, force_readable_name: bool = false) -> void:
+	if not is_instance_valid(parent) or not is_instance_valid(child):
+		return
+
+	parent.add_child(child, force_readable_name)
+	
+	if Engine.is_editor_hint() and child.is_inside_tree():
+		var root = EditorInterface.get_edited_scene_root()
+		if root and (parent == root or root.is_ancestor_of(parent)):
+			child.owner = root
+
 # --- Run GDScript ---
 
 static var _error_logger: ErrorCaptureLogger
@@ -476,6 +490,10 @@ static var _error_logger: ErrorCaptureLogger
 static func run_gdscript(code: String) -> String:
 	if not code.contains("@tool"):
 		code = "@tool\n" + code
+
+	var regex = RegEx.new()
+	regex.compile("(\\S+)\\.add_child\\(")
+	code = regex.sub(code, "AiTools.smart_add_child($1, ", true)
 
 	if not _error_logger:
 		_error_logger = ErrorCaptureLogger.new()
