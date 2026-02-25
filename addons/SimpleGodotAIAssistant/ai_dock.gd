@@ -14,6 +14,7 @@ var _image_status_container: HBoxContainer
 var _url_edit: LineEdit
 var _key_edit: LineEdit
 var _model_edit: LineEdit
+var _continue_btn: Button
 
 # Logic
 var _config: Dictionary
@@ -112,6 +113,12 @@ func _setup_ui():
 	_send_btn.pressed.connect(_on_send_pressed)
 	input_container.add_child(_send_btn)
 	
+	_continue_btn = Button.new()
+	_continue_btn.text = "Continue"
+	_continue_btn.visible = false
+	_continue_btn.pressed.connect(_on_continue_pressed)
+	input_container.add_child(_continue_btn)
+	
 	_stop_btn = Button.new()
 	_stop_btn.text = "Stop"
 	_stop_btn.visible = false
@@ -186,6 +193,7 @@ func _on_clear_pressed():
 	_chat_display.text = ""
 	_clear_pending_image()
 	_context_label.text = "Tokens: 0"
+	_continue_btn.visible = false
 
 func _clear_pending_image():
 	_pending_image_base64 = ""
@@ -213,6 +221,7 @@ func _on_stop_pressed():
 	_is_processing = false
 	_send_btn.disabled = false
 	_stop_btn.visible = false
+	_continue_btn.visible = true
 	_append_system_message("Generation stopped.")
 
 func _on_send_pressed():
@@ -250,6 +259,7 @@ func _on_send_pressed():
 	_is_processing = true
 	_send_btn.disabled = true
 	_stop_btn.visible = true
+	_continue_btn.visible = false
 	_stop_requested = false
 	
 	await _process_chat_loop()
@@ -257,13 +267,33 @@ func _on_send_pressed():
 	_is_processing = false
 	_send_btn.disabled = false
 	_stop_btn.visible = false
+	_continue_btn.visible = false
+
+func _on_continue_pressed():
+	if _is_processing or _chat_history.is_empty():
+		return
+		
+	_append_system_message("Resuming generation...")
+	
+	_is_processing = true
+	_send_btn.disabled = true
+	_continue_btn.visible = false
+	_stop_btn.visible = true
+	_stop_requested = false
+	
+	await _process_chat_loop()
+	
+	_is_processing = false
+	_send_btn.disabled = false
+	_stop_btn.visible = false
+	_continue_btn.visible = false
 
 # --- The Async Loop ---
 func _process_chat_loop():
 	var safety_loop = 0
 	var keep_going = true
 	
-	while keep_going and safety_loop < 15:
+	while keep_going and safety_loop < 20:
 		safety_loop += 1
 		if _stop_requested: break
 		
