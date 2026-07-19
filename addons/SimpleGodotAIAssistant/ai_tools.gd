@@ -204,8 +204,10 @@ static func _search_recursive(dir_path: String, keyword: String) -> String:
 	var file_name = dir.get_next()
 	var results: PackedStringArray = []
 	
+	var skip_dirs = [".", "..", ".godot", ".git"]
+	
 	while file_name != "":
-		if file_name == "." or file_name == "..":
+		if file_name in skip_dirs:
 			file_name = dir.get_next()
 			continue
 			
@@ -480,7 +482,7 @@ static func smart_add_child(parent: Node, child: Node, force_readable_name: bool
 	
 	if Engine.is_editor_hint() and child.is_inside_tree():
 		var root = EditorInterface.get_edited_scene_root()
-		if root and (parent == root or root.is_ancestor_of(parent)):
+		if root and (parent == root or root.is_ancestor_of(parent)) and not child.owner:
 			child.owner = root
 
 # --- Run GDScript ---

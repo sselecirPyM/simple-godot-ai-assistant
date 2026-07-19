@@ -262,12 +262,12 @@ func _on_send_pressed():
 	_continue_btn.visible = false
 	_stop_requested = false
 	
-	await _process_chat_loop()
+	var success = await _process_chat_loop()
 	
 	_is_processing = false
 	_send_btn.disabled = false
 	_stop_btn.visible = false
-	_continue_btn.visible = false
+	_continue_btn.visible = not success
 
 func _on_continue_pressed():
 	if _is_processing or _chat_history.is_empty():
@@ -281,25 +281,29 @@ func _on_continue_pressed():
 	_stop_btn.visible = true
 	_stop_requested = false
 	
-	await _process_chat_loop()
+	var success = await _process_chat_loop()
 	
 	_is_processing = false
 	_send_btn.disabled = false
 	_stop_btn.visible = false
-	_continue_btn.visible = false
+	_continue_btn.visible = not success
 
 # --- The Async Loop ---
-func _process_chat_loop():
+func _process_chat_loop() -> bool:
 	var safety_loop = 0
 	var keep_going = true
+	var success = true
 	
 	while keep_going and safety_loop < 20:
 		safety_loop += 1
-		if _stop_requested: break
+		if _stop_requested:
+			success = false
+			break
 		
 		# 1. Send Request
 		var response_dict = await _send_to_api()
 		if not response_dict or _stop_requested: 
+			success = false
 			break
 			
 		if response_dict.has("usage"):
@@ -307,6 +311,7 @@ func _process_chat_loop():
 			_update_tokens(u.get("prompt_tokens", 0), u.get("completion_tokens", 0), u.get("total_tokens", 0))
 			
 		if response_dict["choices"].is_empty():
+			success = false
 			break
 			
 		var choice = response_dict["choices"][0]
@@ -334,7 +339,9 @@ func _process_chat_loop():
 			
 		if tool_calls and tool_calls is Array:
 			for tc in tool_calls:
-				if _stop_requested: break
+				if _stop_requested:
+					success = false
+					break
 				
 				var id = tc["id"]
 				var func_def = tc["function"]
@@ -345,7 +352,9 @@ func _process_chat_loop():
 				
 				# Small delay to let UI update
 				await get_tree().process_frame
-				if _stop_requested: break
+				if _stop_requested:
+					success = false
+					break
 				
 				var result_str = _execute_tool(func_name, args_json)
 				var preview = result_str.substr(0, 150) + "..." if result_str.length() > 150 else result_str
@@ -358,6 +367,8 @@ func _process_chat_loop():
 				})
 		else:
 			keep_going = false
+
+	return success
 
 func _send_to_api() -> Dictionary:
 	var headers = [
@@ -374,7 +385,7 @@ func _send_to_api() -> Dictionary:
 	}
 	
 	var json_str = JSON.stringify(body)
-	var err = _http_request.request(_config.get("endpoint"), headers, HTTPClient.METHOD_POST, json_str)
+	var err = _http_request.request(_config.get("endpoint").replace("/chat/completions", "") + "/chat/completions", headers, HTTPClient.METHOD_POST, json_str)
 	
 	if err != OK:
 		_append_system_message("HTTP Request Failed: " + error_string(err))
