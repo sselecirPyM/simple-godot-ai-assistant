@@ -135,6 +135,20 @@ static func get_tool_definitions() -> Array[Dictionary]:
 		{
 			"type": "function",
 			"function": {
+				"name": "take_screenshot",
+				"description": "Take a screenshot of the Godot Editor window. The capture happens on the next rendered frame. " +
+					"Returns a base64-encoded PNG image. Only use this if you have multimodal (vision) capability.",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"max_width": { "type": "integer", "description": "Optional. Max width in pixels of the returned image (default 1280). Smaller values reduce token usage." }
+					}
+				}
+			}
+		},
+		{
+			"type": "function",
+			"function": {
 				"name": "replace_text",
 				"description": "Edit a file by replacing a unique text snippet with new text. " +
 					"The old_text must match exactly one location in the file (include enough surrounding context to make it unique). " +
@@ -236,6 +250,11 @@ static func read_file(path: String) -> String:
 
 static func search_files(keyword: String) -> String:
 	return _search_recursive("res://", keyword)
+
+static func take_screenshot(max_width: int = 1280, dock: Control = null) -> String:
+
+	var result = await dock.call("capture_screenshot_without_dock", max_width)
+	return str(result)
 
 static func _search_recursive(dir_path: String, keyword: String) -> String:
 	var dir = DirAccess.open(dir_path)
