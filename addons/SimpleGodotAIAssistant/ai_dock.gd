@@ -15,8 +15,14 @@ var _url_edit: LineEdit
 var _key_edit: LineEdit
 var _model_edit: LineEdit
 var _continue_btn: Button
+var _profile_label: Label
+var _profile_dialog: AcceptDialog
+var _profile_list: ItemList
+var _profile_name_edit: LineEdit
 
 # Logic
+var _profiles: Dictionary
+var _active_profile: String
 var _config: Dictionary
 var _chat_history: Array = []
 var _http_request: HTTPRequest
@@ -25,7 +31,10 @@ var _is_processing: bool = false
 var _stop_requested: bool = false
 
 func _ready():
-	_config = AiConfigManager.load_config()
+	var data = AiConfigManager.load_data()
+	_profiles = data["profiles"]
+	_active_profile = data["active_profile"]
+	_config = _profiles[_active_profile]
 	_setup_ui()
 	
 	_http_request = HTTPRequest.new()
@@ -142,7 +151,20 @@ func _create_settings_panel():
 	
 	var vbox = VBoxContainer.new()
 	margin.add_child(vbox)
-	
+
+	# --- Profile Row ---
+	var profile_row = HBoxContainer.new()
+	_profile_label = Label.new()
+	_profile_label.text = "Profile: " + _active_profile
+	_profile_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	profile_row.add_child(_profile_label)
+
+	var switch_btn = Button.new()
+	switch_btn.text = "Switch / Manage..."
+	switch_btn.pressed.connect(_show_profile_dialog)
+	profile_row.add_child(switch_btn)
+	vbox.add_child(profile_row)
+
 	var grid = GridContainer.new()
 	grid.columns = 2
 	
@@ -172,19 +194,130 @@ func _create_settings_panel():
 	save_btn.pressed.connect(_save_settings)
 	vbox.add_child(save_btn)
 
-func _on_settings_toggled(toggled: bool):
-	_settings_panel.visible = toggled
-	if toggled:
-		_url_edit.text = _config.get("endpoint", "")
-		_key_edit.text = _config.get("api_key", "")
-		_model_edit.text = _config.get("model", "")
+	# --- Profile Dialog ---
+	_profile_dialog = AcceptDialog.new()
+	_profile_dialog.title = "AI Profiles"
+	_profile_dialog.ok_button_text = "Close"
 
-func _save_settings():
+	var dvbox = VBoxContainer.new()
+	dvbox.custom_minimum_size = Vector2(360, 260)
+	_profile_dialog.add_child(dvbox)
+
+	_profile_list = ItemList.new()
+	_profile_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_profile_list.item_activated.connect(_on_profile_item_activated)
+	dvbox.add_child(_profile_list)
+
+	var row = HBoxContainer.new()
+	_profile_name_edit = LineEdit.new()
+	_profile_name_edit.placeholder_text = "New profile name"
+	_profile_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(_profile_name_edit)
+
+	var add_btn = Button.new()
+	add_btn.text = "Add"
+	add_btn.pressed.connect(_on_add_profile)
+	row.add_child(add_btn)
+
+	var del_btn = Button.new()
+	del_btn.text = "Delete"
+	del_btn.pressed.connect(_on_delete_profile)
+	row.add_child(del_btn)
+	dvbox.add_child(row)
+
+	var use_btn = Button.new()
+	use_btn.text = "Use Selected Profile"
+	use_btn.pressed.connect(_on_use_profile_pressed)
+	dvbox.add_child(use_btn)
+
+	add_child(_profile_dialog)
+
+func _show_profile_dialog():
+	_sync_fields_to_profile()
+	_save_all()
+	_refresh_profile_list()
+	_profile_dialog.popup_centered()
+
+func _refresh_profile_list():
+	_profile_list.clear()
+	for name in _profiles.keys():
+		var idx = _profile_list.add_item(name)
+		if name == _active_profile:
+			_profile_list.select(idx)
+
+func _on_add_profile():
+	var name = _profile_name_edit.text.strip_edges()
+	if name.is_empty() or _profiles.has(name):
+		return
+	_profiles[name] = AiConfigManager.get_default_profile()
+	_profile_name_edit.text = ""
+	_save_all()
+	_refresh_profile_list()
+
+func _on_delete_profile():
+	var sel = _profile_list.get_selected_items()
+	if sel.is_empty():
+		return
+	if _profiles.size() <= 1:
+		_append_system_message("Cannot delete the last profile.")
+		return
+	var name = _profile_list.get_item_text(sel[0])
+	_profiles.erase(name)
+	if name == _active_profile:
+		_active_profile = _profiles.keys()[0]
+		_config = _profiles[_active_profile]
+		_profile_label.text = "Profile: " + _active_profile
+		_update_fields()
+	_save_all()
+	_refresh_profile_list()
+
+func _on_use_profile_pressed():
+	var sel = _profile_list.get_selected_items()
+	if sel.is_empty():
+		return
+	_switch_profile(_profile_list.get_item_text(sel[0]))
+
+func _on_profile_item_activated(index: int):
+	_switch_profile(_profile_list.get_item_text(index))
+
+func _switch_profile(name: String):
+	if not _profiles.has(name) or name == _active_profile:
+		return
+	_sync_fields_to_profile()
+	_active_profile = name
+	_config = _profiles[name]
+	_profile_label.text = "Profile: " + name
+	_update_fields()
+	_save_all()
+	_append_system_message("Switched to profile: " + name)
+	_profile_dialog.hide()
+
+func _sync_fields_to_profile():
 	_config["endpoint"] = _url_edit.text
 	_config["api_key"] = _key_edit.text
 	_config["model"] = _model_edit.text
-	AiConfigManager.save_config(_config)
-	_append_system_message("Settings saved.")
+
+func _save_all():
+	AiConfigManager.save_data({
+		"profiles": _profiles,
+		"active_profile": _active_profile
+	})
+
+func _on_settings_toggled(toggled: bool):
+	_settings_panel.visible = toggled
+	if toggled:
+		_profile_label.text = "Profile: " + _active_profile
+		_update_fields()
+
+func _update_fields():
+	_url_edit.text = _config.get("endpoint", "")
+	_key_edit.text = _config.get("api_key", "")
+	_model_edit.text = _config.get("model", "")
+
+func _save_settings():
+	_sync_fields_to_profile()
+	_save_all()
+	_append_system_message("Settings saved to profile: " + _active_profile)
 	_settings_panel.visible = false
 	_settings_btn.button_pressed = false
 
@@ -373,7 +506,8 @@ func _process_chat_loop() -> bool:
 func _send_to_api() -> Dictionary:
 	var headers = [
 		"Content-Type: application/json",
-		"Authorization: Bearer " + _config.get("api_key", "")
+		"Authorization: Bearer " + _config.get("api_key", ""),
+		"User-Agent: SimpleGodotAIAssistant"
 	]
 	
 	var body = {
