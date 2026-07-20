@@ -14,13 +14,16 @@ static func get_default_profile() -> Dictionary:
 static func load_data() -> Dictionary:
 	var data = {
 		"profiles": { "Default": get_default_profile() },
-		"active_profile": "Default"
+		"active_profile": "Default",
+		"enabled_skills": []
 	}
 
 	if FileAccess.file_exists(CONFIG_PATH):
 		var file = FileAccess.open(CONFIG_PATH, FileAccess.READ)
 		var json = JSON.parse_string(file.get_as_text())
 		if json and json is Dictionary:
+			if json.has("enabled_skills") and json["enabled_skills"] is Array:
+				data["enabled_skills"] = json["enabled_skills"]
 			if json.has("profiles"):
 				data["profiles"].merge(json["profiles"], true)
 				if json.has("active_profile"):

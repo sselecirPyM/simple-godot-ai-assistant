@@ -3,6 +3,7 @@ class_name AiTools
 extends RefCounted
 
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "svg", "bmp", "tga"]
+const SKILLS_DIR = "res://skills/"
 
 # --- Tool Definitions ---
 
@@ -134,6 +135,46 @@ static func get_tool_definitions() -> Array[Dictionary]:
 		{
 			"type": "function",
 			"function": {
+				"name": "replace_text",
+				"description": "Edit a file by replacing a unique text snippet with new text. " +
+					"The old_text must match exactly one location in the file (include enough surrounding context to make it unique). " +
+					"Prefer this over create_file for small edits to existing files.",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"path": { "type": "string", "description": "The full path of the file to edit (e.g., 'res://scripts/my_script.gd')." },
+						"old_text": { "type": "string", "description": "The exact text to find. Must occur exactly once in the file." },
+						"new_text": { "type": "string", "description": "The text to replace it with." }
+					},
+					"required": ["path", "old_text", "new_text"]
+				}
+			}
+		},
+		{
+			"type": "function",
+			"function": {
+				"name": "list_skills",
+				"description": "List available skills (instruction files in res://skills/).",
+				"parameters": { "type": "object", "properties": { } }
+			}
+		},
+		{
+			"type": "function",
+			"function": {
+				"name": "load_skill",
+				"description": "Load the full instructions of a skill by name. Use list_skills first to see what is available.",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"name": { "type": "string", "description": "The skill name (file basename without .md)." }
+					},
+					"required": ["name"]
+				}
+			}
+		},
+		{
+			"type": "function",
+			"function": {
 				"name": "run_gdscript",
 				"description": "Execute a temporary GDScript snippet immediately and return the result. " +
 					"The script MUST contain a 'func run():' method which returns a value (String, Dictionary, or basic type). " +
@@ -222,6 +263,106 @@ static func _search_recursive(dir_path: String, keyword: String) -> String:
 		file_name = dir.get_next()
 		
 	return "\n".join(results).strip_edges()
+
+# --- Skills ---
+
+static func parse_skill_file(path: String) -> Dictionary:
+	var result = {
+		"name": path.get_file().get_basename(),
+		"description": "",
+		"content": ""
+	}
+
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file:
+		return result
+
+	var text = file.get_as_text()
+	if text.begins_with("---"):
+		var end = text.find("\n---", 3)
+		if end != -1:
+			var header = text.substr(3, end - 3)
+			for line in header.split("\n"):
+				var sep = line.find(":")
+				if sep == -1:
+					continue
+				var key = line.substr(0, sep).strip_edges().to_lower()
+				var value = line.substr(sep + 1).strip_edges()
+				if value.length() >= 2 and ((value.begins_with("\"") and value.ends_with("\"")) or (value.begins_with("'") and value.ends_with("'"))):
+					value = value.substr(1, value.length() - 2)
+				match key:
+					"name":
+						if not value.is_empty():
+							result["name"] = value
+					"description":
+						result["description"] = value
+			result["content"] = text.substr(end + 4).strip_edges()
+			return result
+
+	result["content"] = text.strip_edges()
+	return result
+
+static func get_available_skills() -> PackedStringArray:
+	var skills: PackedStringArray = []
+	var dir = DirAccess.open(SKILLS_DIR)
+	if not dir:
+		return skills
+
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	while file_name != "":
+		if not dir.current_is_dir() and file_name.get_extension().to_lower() == "md":
+			skills.append(file_name.get_basename())
+		file_name = dir.get_next()
+
+	skills.sort()
+	return skills
+
+static func list_skills() -> String:
+	var skills = get_available_skills()
+	if skills.is_empty():
+		return "No skills found. Create .md instruction files in '%s' to define skills." % SKILLS_DIR
+
+	var lines: PackedStringArray = []
+	for skill_id in skills:
+		var data = parse_skill_file(SKILLS_DIR.path_join(skill_id + ".md"))
+		var line = "- " + skill_id
+		if data["name"] != skill_id:
+			line += " (%s)" % data["name"]
+		if not data["description"].is_empty():
+			line += ": " + data["description"]
+		lines.append(line)
+	return "Available skills:\n" + "\n".join(lines)
+
+static func load_skill(name: String) -> String:
+	var path = SKILLS_DIR.path_join(name.get_basename() + ".md")
+	if not FileAccess.file_exists(path):
+		return "Error: Skill '%s' not found. Use list_skills to see available skills." % name
+
+	var length = FileAccess.open(path, FileAccess.READ).get_length()
+	if length > 10240:
+		return "Error: Skill file is too large (%d bytes). Limit is 10KB." % length
+
+	var data = parse_skill_file(path)
+	var output = "# Skill: %s\n" % data["name"]
+	if not data["description"].is_empty():
+		output += "Description: %s\n" % data["description"]
+	return output + "\n" + data["content"]
+
+static func get_skills_system_prompt(skill_names: Array) -> String:
+	var parts: PackedStringArray = []
+	for skill_name in skill_names:
+		var path = SKILLS_DIR.path_join(str(skill_name).get_basename() + ".md")
+		if FileAccess.file_exists(path):
+			var data = parse_skill_file(path)
+			var header = "### Skill: %s" % data["name"]
+			if not data["description"].is_empty():
+				header += " — %s" % data["description"]
+			parts.append(header + "\n" + data["content"])
+
+	if parts.is_empty():
+		return ""
+	return "The following skills are enabled. Follow their instructions when relevant to the user's request:\n\n" + "\n\n".join(parts)
 
 # --- Node Operations ---
 
@@ -417,6 +558,48 @@ static func create_file(path: String, content: String) -> String:
 
 		_call_deferred_refresh()
 		return "Success: File created/overwritten at '%s'." % path
+
+static func replace_text(path: String, old_text: String, new_text: String) -> String:
+	if old_text.is_empty():
+		return "Error: old_text cannot be empty."
+
+	if not FileAccess.file_exists(path):
+		return "Error: File not found: '%s'." % path
+
+	var file = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return "Error: Could not open file '%s'." % path
+
+	var length = file.get_length()
+	if length > 102400:
+		return "Error: File is too large (%d bytes). Edit limit is 100KB." % length
+
+	var content = file.get_as_text()
+	file.close()
+
+	var match_count = content.count(old_text)
+	if match_count == 0:
+		return "Error: old_text not found in '%s'." % path
+	if match_count > 1:
+		return "Error: old_text matches %d locations in '%s'. Include more surrounding context to make it unique." % [match_count, path]
+
+	content = content.replace(old_text, new_text)
+
+	if path.get_extension().to_lower() == "gdshader":
+		if "hint_color" in content:
+			content = content.replace("hint_color", "source_color")
+		return _update_shader_with_cache_bypass(path, content)
+
+	var out_file = FileAccess.open(path, FileAccess.WRITE)
+	if out_file == null:
+		return "Error: Could not open file '%s' for writing." % path
+
+	out_file.store_string(content)
+	out_file.flush()
+	out_file.close()
+
+	_call_deferred_refresh()
+	return "Success: Replaced 1 occurrence in '%s'." % path
 
 static func _call_deferred_refresh() -> void:
 	if Engine.is_editor_hint():

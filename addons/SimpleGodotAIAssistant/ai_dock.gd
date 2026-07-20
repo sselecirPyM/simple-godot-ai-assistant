@@ -19,11 +19,15 @@ var _profile_label: Label
 var _profile_dialog: AcceptDialog
 var _profile_list: ItemList
 var _profile_name_edit: LineEdit
+var _skills_btn: Button
+var _skills_panel: PanelContainer
+var _skills_list: ItemList
 
 # Logic
 var _profiles: Dictionary
 var _active_profile: String
 var _config: Dictionary
+var _enabled_skills: Array = []
 var _chat_history: Array = []
 var _http_request: HTTPRequest
 var _pending_image_base64: String = ""
@@ -35,6 +39,7 @@ func _ready():
 	_profiles = data["profiles"]
 	_active_profile = data["active_profile"]
 	_config = _profiles[_active_profile]
+	_enabled_skills = data.get("enabled_skills", [])
 	_setup_ui()
 	
 	_http_request = HTTPRequest.new()
@@ -65,6 +70,12 @@ func _setup_ui():
 	clear_btn.text = "Clear Chat"
 	clear_btn.pressed.connect(_on_clear_pressed)
 	tool_bar.add_child(clear_btn)
+
+	_skills_btn = Button.new()
+	_skills_btn.text = "Skills"
+	_skills_btn.toggle_mode = true
+	_skills_btn.toggled.connect(_on_skills_toggled)
+	tool_bar.add_child(_skills_btn)
 	
 	var spacer = Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -80,6 +91,10 @@ func _setup_ui():
 	# --- Settings Panel ---
 	_create_settings_panel()
 	_main_layout.add_child(_settings_panel)
+
+	# --- Skills Panel ---
+	_create_skills_panel()
+	_main_layout.add_child(_skills_panel)
 	
 	# --- Chat Display ---
 	_chat_display = RichTextLabel.new()
@@ -135,7 +150,8 @@ func _setup_ui():
 	input_container.add_child(_stop_btn)
 	
 	_main_layout.add_child(input_container)
-	
+
+	_update_skills_btn_text()
 	_append_system_message("AI Assistant Ready. Configure settings to start. Paste images directly (Ctrl+V).")
 
 func _create_settings_panel():
@@ -232,6 +248,75 @@ func _create_settings_panel():
 
 	add_child(_profile_dialog)
 
+func _create_skills_panel():
+	_skills_panel = PanelContainer.new()
+	_skills_panel.visible = false
+
+	var margin = MarginContainer.new()
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_right", 10)
+	_skills_panel.add_child(margin)
+
+	var vbox = VBoxContainer.new()
+	margin.add_child(vbox)
+
+	var info_lbl = Label.new()
+	info_lbl.text = "Enabled skills are injected as a system message. Add .md files to res://skills/."
+	info_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info_lbl.modulate = Color(0.7, 0.7, 0.7)
+	vbox.add_child(info_lbl)
+
+	_skills_list = ItemList.new()
+	_skills_list.select_mode = ItemList.SELECT_MULTI
+	_skills_list.custom_minimum_size = Vector2(0, 120)
+	_skills_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_skills_list.multi_selected.connect(_on_skill_multi_selected)
+	vbox.add_child(_skills_list)
+
+	var refresh_btn = Button.new()
+	refresh_btn.text = "Refresh List"
+	refresh_btn.pressed.connect(_refresh_skills_list)
+	vbox.add_child(refresh_btn)
+
+func _on_skills_toggled(toggled: bool):
+	_skills_panel.visible = toggled
+	if toggled:
+		_refresh_skills_list()
+
+func _refresh_skills_list():
+	_skills_list.clear()
+	var available = AiTools.get_available_skills()
+	var still_valid: Array = []
+	for skill_name in available:
+		var data = AiTools.parse_skill_file(AiTools.SKILLS_DIR.path_join(skill_name + ".md"))
+		var idx = _skills_list.add_item(skill_name)
+		if not data["description"].is_empty():
+			_skills_list.set_item_tooltip(idx, data["description"])
+		if skill_name in _enabled_skills:
+			_skills_list.select(idx, false)
+			still_valid.append(skill_name)
+	if still_valid.size() != _enabled_skills.size():
+		_enabled_skills = still_valid
+		_save_all()
+	_update_skills_btn_text()
+
+func _on_skill_multi_selected(_index: int, _selected: bool):
+	_enabled_skills.clear()
+	for idx in _skills_list.get_selected_items():
+		_enabled_skills.append(_skills_list.get_item_text(idx))
+	_save_all()
+	_update_skills_btn_text()
+	if not _enabled_skills.is_empty():
+		_append_system_message("Skills enabled: " + ", ".join(_enabled_skills))
+
+func _update_skills_btn_text():
+	if _enabled_skills.is_empty():
+		_skills_btn.text = "Skills"
+	else:
+		_skills_btn.text = "Skills (%d)" % _enabled_skills.size()
+
 func _show_profile_dialog():
 	_sync_fields_to_profile()
 	_save_all()
@@ -300,7 +385,8 @@ func _sync_fields_to_profile():
 func _save_all():
 	AiConfigManager.save_data({
 		"profiles": _profiles,
-		"active_profile": _active_profile
+		"active_profile": _active_profile,
+		"enabled_skills": _enabled_skills
 	})
 
 func _on_settings_toggled(toggled: bool):
@@ -510,9 +596,14 @@ func _send_to_api() -> Dictionary:
 		"User-Agent: SimpleGodotAIAssistant"
 	]
 	
+	var messages = _chat_history
+	var skills_prompt = AiTools.get_skills_system_prompt(_enabled_skills)
+	if not skills_prompt.is_empty():
+		messages = [{ "role": "system", "content": skills_prompt }] + _chat_history
+
 	var body = {
 		"model": _config.get("model", "gpt-4o"),
-		"messages": _chat_history,
+		"messages": messages,
 		"tools": AiTools.get_tool_definitions(),
 		"reasoning_effort": "high",
 		"max_tokens": 16000
@@ -566,6 +657,9 @@ func _execute_tool(name: String, json_args: String) -> String:
 		"get_node_properties_by_path": return AiTools.get_node_properties_by_path(args.get("path", ""))
 		"get_node_property_value": return AiTools.get_node_property_value(args.get("node_path", ""), args.get("property_path", ""))
 		"create_file": return AiTools.create_file(args.get("path", ""), args.get("content", ""))
+		"replace_text": return AiTools.replace_text(args.get("path", ""), args.get("old_text", ""), args.get("new_text", ""))
+		"list_skills": return AiTools.list_skills()
+		"load_skill": return AiTools.load_skill(args.get("name", ""))
 		"run_gdscript": return AiTools.run_gdscript(args.get("code", ""))
 		_: return "Error: Unknown tool."
 
