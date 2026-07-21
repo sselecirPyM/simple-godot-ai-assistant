@@ -102,8 +102,8 @@ func _capture_editor_image(max_width: int) -> String:
 		var scale_factor = float(max_width) / img.get_width()
 		img.resize(max_width, int(img.get_height() * scale_factor), Image.INTERPOLATE_BILINEAR)
 
-	var buffer = img.save_png_to_buffer()
-	return "data:image/png;base64," + Marshalls.raw_to_base64(buffer)
+	var buffer = img.save_jpg_to_buffer(0.90)
+	return "data:image/jpeg;base64," + Marshalls.raw_to_base64(buffer)
 
 func _setup_ui():
 	# Clear existing children if reloading
@@ -577,7 +577,7 @@ func _process_chat_loop() -> bool:
 	var keep_going = true
 	var success = true
 	
-	while keep_going and safety_loop < 20:
+	while keep_going and safety_loop < 100:
 		safety_loop += 1
 		if _stop_requested:
 			success = false
@@ -756,8 +756,8 @@ func _execute_tool(name: String, json_args: String) -> String:
 
 func _update_tokens(p_tok, c_tok, t_tok):
 	_context_label.text = "Tokens: %d (In: %d / Out: %d)" % [t_tok, p_tok, c_tok]
-	if t_tok > 16000: _context_label.modulate = Color.RED
-	elif t_tok > 8000: _context_label.modulate = Color.YELLOW
+	if t_tok > 32000: _context_label.modulate = Color.RED
+	elif t_tok > 16000: _context_label.modulate = Color.YELLOW
 	else: _context_label.modulate = Color(0.7, 0.7, 0.7)
 
 func _append_message(sender: String, text: String):

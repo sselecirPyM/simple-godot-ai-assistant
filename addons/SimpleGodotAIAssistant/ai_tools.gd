@@ -2,7 +2,7 @@
 class_name AiTools
 extends RefCounted
 
-const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "svg", "bmp", "tga"]
+const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "tga"]
 const SKILLS_DIR = "res://skills/"
 
 # --- Tool Definitions ---
@@ -27,7 +27,7 @@ static func get_tool_definitions() -> Array[Dictionary]:
 			"type": "function",
 			"function": {
 				"name": "read_file",
-				"description": "Read the content of a specific file.",
+				"description": "Read the content of a specific file. Image files (png, jpg, jpeg, webp, bmp, tga) are returned as vision input; only use this for images if you have multimodal (vision) capability.",
 				"parameters": {
 					"type": "object",
 					"properties": {
@@ -137,7 +137,7 @@ static func get_tool_definitions() -> Array[Dictionary]:
 			"function": {
 				"name": "take_screenshot",
 				"description": "Take a screenshot of the Godot Editor window. The capture happens on the next rendered frame. " +
-					"Returns a base64-encoded PNG image. Only use this if you have multimodal (vision) capability.",
+					"Returns a base64-encoded JPEG image. Only use this if you have multimodal (vision) capability.",
 				"parameters": {
 					"type": "object",
 					"properties": {
@@ -191,7 +191,9 @@ static func get_tool_definitions() -> Array[Dictionary]:
 			"function": {
 				"name": "run_gdscript",
 				"description": "Execute a temporary GDScript snippet immediately and return the result. " +
-					"The script MUST contain a 'func run():' method which returns a value (String, Dictionary, or basic type). " +
+					"The script MUST contain a 'func run():' method which returns a value (String, Dictionary, Image, or basic type). " +
+					"If run() returns an Image, it will be sent back to you as a viewable image (resized to max 1024px). " +
+					"Alternatively, run() may directly return a String starting with \"data:image/\" (base64 data URI), which is sent back as an image without re-encoding; use this when you already have image bytes (e.g. downloaded via HTTPRequest). " +
 					"The \"tool\" keyword was removed in Godot 4. Use the \"@tool\" annotation instead. " +
 					"Cannot use get_tree(), use EditorInterface.get_edited_scene_root() instead.",
 				"parameters": {
@@ -241,9 +243,22 @@ static func read_file(path: String) -> String:
 		return "Error: File is too large (%d bytes). Text file limit is 10KB." % length
 		
 	if is_image:
+		var img = Image.load_from_file(path)
+		if img and not img.is_empty():
+			var width = img.get_width()
+			var height = img.get_height()
+			var longest = maxi(width, height)
+			if longest > 1024:
+				var scale = 1024.0 / longest
+				img.resize(maxi(1, int(width * scale)), maxi(1, int(height * scale)), Image.INTERPOLATE_BILINEAR)
+				if img.detect_alpha() != Image.ALPHA_NONE:
+					img.convert(Image.FORMAT_RGB8)
+				var jpg_buffer = img.save_jpg_to_buffer(0.85)
+				return "data:image/jpeg;base64," + Marshalls.raw_to_base64(jpg_buffer)
+
 		var buffer = file.get_buffer(length)
 		var base64 = Marshalls.raw_to_base64(buffer)
-		var mime_type = "jpeg" if extension == "jpg" else ("svg+xml" if extension == "svg" else extension)
+		var mime_type = "jpeg" if extension == "jpg" else extension
 		return "data:image/%s;base64,%s" % [mime_type, base64]
 	
 	return file.get_as_text()
@@ -744,6 +759,21 @@ static func run_gdscript(code: String) -> String:
 		else:
 			instance.free()
 			
+	if result is Image:
+		var img: Image = result
+		if img.is_empty():
+			return "Error: run() returned an empty Image."
+		var width = img.get_width()
+		var height = img.get_height()
+		var longest = maxi(width, height)
+		if longest > 1024:
+			var scale = 1024.0 / longest
+			img.resize(maxi(1, int(width * scale)), maxi(1, int(height * scale)), Image.INTERPOLATE_BILINEAR)
+		if img.detect_alpha() != Image.ALPHA_NONE:
+			img.convert(Image.FORMAT_RGB8)
+		var jpg_buffer = img.save_jpg_to_buffer(0.85)
+		return "data:image/jpeg;base64," + Marshalls.raw_to_base64(jpg_buffer)
+
 	if result is Object:
 		var res_str = "[Object: %s ID:%d]" % [result.get_class(), result.get_instance_id()]
 		return res_str

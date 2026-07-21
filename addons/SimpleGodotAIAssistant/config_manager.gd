@@ -8,13 +8,42 @@ static func get_default_profile() -> Dictionary:
 	return {
 		"endpoint": "https://api.openai.com/v1/chat/completions",
 		"api_key": "",
-		"model": "gpt-4o"
+		"model": "gpt-5.6-sol"
+	}
+
+static func get_default_profiles() -> Dictionary:
+	return {
+		"OpenAI": {
+			"endpoint": "https://api.openai.com/v1/chat/completions",
+			"api_key": "",
+			"model": "gpt-5.6-sol"
+		},
+		"Gemini": {
+			"endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+			"api_key": "",
+			"model": "gemini-3.1-pro-preview"
+		},
+		"DeepSeek": {
+			"endpoint": "https://api.deepseek.com/chat/completions",
+			"api_key": "",
+			"model": "deepseek-v4-pro"
+		},
+		"Moonshot": {
+			"endpoint": "https://api.moonshot.cn/v1/chat/completions",
+			"api_key": "",
+			"model": "kimi-k3"
+		},
+		"Zhipu": {
+			"endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+			"api_key": "",
+			"model": "glm-5.2"
+		}
 	}
 
 static func load_data() -> Dictionary:
 	var data = {
-		"profiles": { "Default": get_default_profile() },
-		"active_profile": "Default",
+		"profiles": get_default_profiles(),
+		"active_profile": "OpenAI",
 		"enabled_skills": []
 	}
 
