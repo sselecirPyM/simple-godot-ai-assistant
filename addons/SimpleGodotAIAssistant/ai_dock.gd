@@ -329,6 +329,7 @@ func _create_skills_panel():
 
 	_skills_list = ItemList.new()
 	_skills_list.select_mode = ItemList.SELECT_MULTI
+	_skills_list.allow_reselect = true
 	_skills_list.custom_minimum_size = Vector2(0, 120)
 	_skills_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_skills_list.multi_selected.connect(_on_skill_multi_selected)
@@ -751,7 +752,7 @@ func _execute_tool(name: String, json_args: String) -> String:
 		"take_screenshot": return await AiTools.take_screenshot(int(args.get("max_width", 1280)), self)
 		"list_skills": return AiTools.list_skills()
 		"load_skill": return AiTools.load_skill(args.get("name", ""))
-		"run_gdscript": return AiTools.run_gdscript(args.get("code", ""))
+		"run_gdscript": return await AiTools.run_gdscript(args.get("code", ""))
 		_: return "Error: Unknown tool."
 
 func _update_tokens(p_tok, c_tok, t_tok):

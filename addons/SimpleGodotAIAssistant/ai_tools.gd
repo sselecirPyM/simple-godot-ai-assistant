@@ -195,11 +195,15 @@ static func get_tool_definitions() -> Array[Dictionary]:
 					"If run() returns an Image, it will be sent back to you as a viewable image (resized to max 1024px). " +
 					"Alternatively, run() may directly return a String starting with \"data:image/\" (base64 data URI), which is sent back as an image without re-encoding; use this when you already have image bytes (e.g. downloaded via HTTPRequest). " +
 					"The \"tool\" keyword was removed in Godot 4. Use the \"@tool\" annotation instead. " +
-					"Cannot use get_tree(), use EditorInterface.get_edited_scene_root() instead.",
+					"Async is supported: run() may use 'await' (e.g. 'await (Engine.get_main_loop() as SceneTree).create_timer(1.0).timeout' or a node's signal); execution waits until run() fully completes before returning its result. " +
+					"Cannot use get_tree(), use EditorInterface.get_edited_scene_root() instead. " +
+					"When adding a Node to the edited scene tree, you MUST set child.owner = EditorInterface.get_edited_scene_root() so the node is persisted and visible in the editor's Scene dock. Otherwise the node will be lost. " +
+					"Additionally, whenever you modify the edited scene, you MUST call EditorInterface.mark_scene_as_unsaved() so the editor correctly registers the unsaved changes. " +
+					"When instantiating an imported scene file (e.g., .gltf, .glb, .blend, .fbx, .obj, .dae), do NOT instantiate it directly. Instead, first create a new inherited .tscn scene from it, then instantiate that .tscn. To create an inherited scene in code: var base = load('res://model.glb'); var inst = base.instantiate(); inst.scene_file_path = base.resource_path; var packed = PackedScene.new(); packed.pack(inst); ResourceSaver.save(packed, 'res://model_inherited.tscn').",
 				"parameters": {
 					"type": "object",
 					"properties": {
-						"code": { "type": "string", "description": "The full GDScript code. It must extend RefCounted and implement 'func run()'." }
+						"code": { "type": "string", "description": "The full GDScript code. It must implement 'func run()'." }
 					},
 					"required": ["code"]
 				}
@@ -253,7 +257,7 @@ static func read_file(path: String) -> String:
 				img.resize(maxi(1, int(width * scale)), maxi(1, int(height * scale)), Image.INTERPOLATE_BILINEAR)
 				if img.detect_alpha() != Image.ALPHA_NONE:
 					img.convert(Image.FORMAT_RGB8)
-				var jpg_buffer = img.save_jpg_to_buffer(0.85)
+				var jpg_buffer = img.save_jpg_to_buffer(0.9)
 				return "data:image/jpeg;base64," + Marshalls.raw_to_base64(jpg_buffer)
 
 		var buffer = file.get_buffer(length)
@@ -591,7 +595,10 @@ static func create_file(path: String, content: String) -> String:
 		file.close()
 
 		_call_deferred_refresh()
-		return "Success: File created/overwritten at '%s'." % path
+		var msg = "Success: File created/overwritten at '%s'." % path
+		if path.get_extension().to_lower() in ["tscn", "scn"]:
+			msg += " Note: Scene changes on disk may not be immediately reflected in the editor if this scene is currently open; you may need to tell the user to revert/reopen the scene to see them."
+		return msg
 
 static func replace_text(path: String, old_text: String, new_text: String) -> String:
 	if old_text.is_empty():
@@ -612,6 +619,18 @@ static func replace_text(path: String, old_text: String, new_text: String) -> St
 	file.close()
 
 	var match_count = content.count(old_text)
+	if match_count == 0 and old_text.contains("\n"):
+		if content.contains("\r\n"):
+			var crlf_text = old_text.replace("\n", "\r\n")
+			if content.count(crlf_text) > 0:
+				old_text = crlf_text
+				new_text = new_text.replace("\n", "\r\n")
+				match_count = content.count(old_text)
+		else:
+			var lf_text = old_text.replace("\r\n", "\n")
+			if content.count(lf_text) > 0:
+				old_text = lf_text
+				match_count = content.count(old_text)
 	if match_count == 0:
 		return "Error: old_text not found in '%s'." % path
 	if match_count > 1:
@@ -633,7 +652,10 @@ static func replace_text(path: String, old_text: String, new_text: String) -> St
 	out_file.close()
 
 	_call_deferred_refresh()
-	return "Success: Replaced 1 occurrence in '%s'." % path
+	var msg = "Success: Replaced 1 occurrence in '%s'." % path
+	if path.get_extension().to_lower() in ["tscn", "scn"]:
+		msg += " Note: Scene changes on disk may not be immediately reflected in the editor if this scene is currently open; you may need to tell the user to revert/reopen the scene to see them."
+	return msg
 
 static func _call_deferred_refresh() -> void:
 	if Engine.is_editor_hint():
@@ -691,17 +713,6 @@ class ErrorCaptureLogger extends Logger:
 		if _is_capturing:
 			_log_buffer += "[Line %d]: %s\n" % [line, rationale]
 
-static func smart_add_child(parent: Node, child: Node, force_readable_name: bool = false) -> void:
-	if not is_instance_valid(parent) or not is_instance_valid(child):
-		return
-
-	parent.add_child(child, force_readable_name)
-	
-	if Engine.is_editor_hint() and child.is_inside_tree():
-		var root = EditorInterface.get_edited_scene_root()
-		if root and (parent == root or root.is_ancestor_of(parent)) and not child.owner:
-			child.owner = root
-
 # --- Run GDScript ---
 
 static var _error_logger: ErrorCaptureLogger
@@ -709,10 +720,6 @@ static var _error_logger: ErrorCaptureLogger
 static func run_gdscript(code: String) -> String:
 	if not code.contains("@tool"):
 		code = "@tool\n" + code
-
-	var regex = RegEx.new()
-	regex.compile("(\\S+)\\.add_child\\(")
-	code = regex.sub(code, "AiTools.smart_add_child($1, ", true)
 
 	if not _error_logger:
 		_error_logger = ErrorCaptureLogger.new()
@@ -747,7 +754,7 @@ static func run_gdscript(code: String) -> String:
 		return "Error: The provided GDScript does not contain a 'func run():' method."
 		
 	# Execute
-	var result = instance.call("run")
+	var result = await instance.call("run")
 	
 	# Stop Capture
 	_error_logger.stop_capturing()
@@ -771,7 +778,7 @@ static func run_gdscript(code: String) -> String:
 			img.resize(maxi(1, int(width * scale)), maxi(1, int(height * scale)), Image.INTERPOLATE_BILINEAR)
 		if img.detect_alpha() != Image.ALPHA_NONE:
 			img.convert(Image.FORMAT_RGB8)
-		var jpg_buffer = img.save_jpg_to_buffer(0.85)
+		var jpg_buffer = img.save_jpg_to_buffer(0.9)
 		return "data:image/jpeg;base64," + Marshalls.raw_to_base64(jpg_buffer)
 
 	if result is Object:
