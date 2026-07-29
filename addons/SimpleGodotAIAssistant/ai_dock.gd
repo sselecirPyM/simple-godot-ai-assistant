@@ -3,6 +3,8 @@ extends EditorDock
 
 signal screenshot_captured(result: String)
 
+const EFFORT_OPTIONS: Array = ["default", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+
 # UI Elements
 var _main_layout: VBoxContainer
 var _chat_display: RichTextLabel
@@ -16,6 +18,7 @@ var _image_status_container: HBoxContainer
 var _url_edit: LineEdit
 var _key_edit: LineEdit
 var _model_edit: LineEdit
+var _effort_option: OptionButton
 var _continue_btn: Button
 var _profile_label: Label
 var _profile_dialog: AcceptDialog
@@ -261,6 +264,13 @@ func _create_settings_panel():
 	_model_edit.text = _config.get("model", "")
 	_model_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	grid.add_child(_model_edit)
+
+	grid.add_child(_create_label("Reasoning Effort:"))
+	_effort_option = OptionButton.new()
+	for opt in EFFORT_OPTIONS:
+		_effort_option.add_item(opt)
+	_effort_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_child(_effort_option)
 	
 	vbox.add_child(grid)
 	
@@ -441,6 +451,7 @@ func _sync_fields_to_profile():
 	_config["endpoint"] = _url_edit.text
 	_config["api_key"] = _key_edit.text
 	_config["model"] = _model_edit.text
+	_config["reasoning_effort"] = _effort_option.get_item_text(_effort_option.selected)
 
 func _save_all():
 	AiConfigManager.save_data({
@@ -459,6 +470,9 @@ func _update_fields():
 	_url_edit.text = _config.get("endpoint", "")
 	_key_edit.text = _config.get("api_key", "")
 	_model_edit.text = _config.get("model", "")
+	var effort = _config.get("reasoning_effort", "high")
+	var idx = EFFORT_OPTIONS.find(effort)
+	_effort_option.selected = idx if idx >= 0 else EFFORT_OPTIONS.find("high")
 
 func _save_settings():
 	_sync_fields_to_profile()
@@ -693,9 +707,12 @@ func _send_to_api() -> Dictionary:
 		"model": _config.get("model", "gpt-4o"),
 		"messages": messages,
 		"tools": AiTools.get_tool_definitions(),
-		"reasoning_effort": "high",
 		"max_tokens": 16000
 	}
+
+	var effort = _config.get("reasoning_effort", "high")
+	if effort != "default":
+		body["reasoning_effort"] = effort
 	
 	var json_str = JSON.stringify(body)
 	var err = _http_request.request(_config.get("endpoint").replace("/chat/completions", "") + "/chat/completions", headers, HTTPClient.METHOD_POST, json_str)

@@ -8,7 +8,8 @@ static func get_default_profile() -> Dictionary:
 	return {
 		"endpoint": "https://api.openai.com/v1/chat/completions",
 		"api_key": "",
-		"model": "gpt-5.6-sol"
+		"model": "gpt-5.6-sol",
+		"reasoning_effort": "high"
 	}
 
 static func get_default_profiles() -> Dictionary:
@@ -16,27 +17,44 @@ static func get_default_profiles() -> Dictionary:
 		"OpenAI": {
 			"endpoint": "https://api.openai.com/v1/chat/completions",
 			"api_key": "",
-			"model": "gpt-5.6-sol"
+			"model": "gpt-5.6-sol",
+			"reasoning_effort": "high"
 		},
 		"Gemini": {
 			"endpoint": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
 			"api_key": "",
-			"model": "gemini-3.1-pro-preview"
+			"model": "gemini-3.1-pro-preview",
+			"reasoning_effort": "high"
 		},
 		"DeepSeek": {
 			"endpoint": "https://api.deepseek.com/chat/completions",
 			"api_key": "",
-			"model": "deepseek-v4-pro"
+			"model": "deepseek-v4-pro",
+			"reasoning_effort": "high"
 		},
 		"Moonshot": {
 			"endpoint": "https://api.moonshot.cn/v1/chat/completions",
 			"api_key": "",
-			"model": "kimi-k3"
+			"model": "kimi-k3",
+			"reasoning_effort": "high"
+		},
+		"Kimi Coding plan": {
+			"endpoint": "https://api.kimi.com/coding/v1",
+			"api_key": "",
+			"model": "k3-256k",
+			"reasoning_effort": "high"
 		},
 		"Zhipu": {
 			"endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
 			"api_key": "",
-			"model": "glm-5.2"
+			"model": "glm-5.2",
+			"reasoning_effort": "high"
+		},
+		"Zhipu Coding plan": {
+			"endpoint": "https://open.bigmodel.cn/api/coding/paas/v4/completions",
+			"api_key": "",
+			"model": "glm-5.2",
+			"reasoning_effort": "high"
 		}
 	}
 

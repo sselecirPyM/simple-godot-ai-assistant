@@ -596,9 +596,31 @@ static func create_file(path: String, content: String) -> String:
 
 		_call_deferred_refresh()
 		var msg = "Success: File created/overwritten at '%s'." % path
+		if path.get_extension().to_lower() == "gd":
+			var script_errors = _check_gdscript_errors(content)
+			if not script_errors.is_empty():
+				msg += "\n\nGDScript Errors:\n%s\n\nPlease fix these errors." % script_errors
 		if path.get_extension().to_lower() in ["tscn", "scn"]:
 			msg += " Note: Scene changes on disk may not be immediately reflected in the editor if this scene is currently open; you may need to tell the user to revert/reopen the scene to see them."
 		return msg
+
+static func _check_gdscript_errors(content: String) -> String:
+	if not _error_logger:
+		_error_logger = ErrorCaptureLogger.new()
+		OS.add_logger(_error_logger)
+	
+	var script = GDScript.new()
+	script.source_code = content
+	
+	_error_logger.start_capturing()
+	var err = script.reload()
+	var captured = _error_logger.stop_capturing()
+	
+	if not captured.is_empty():
+		return captured
+	if err != OK:
+		return error_string(err)
+	return ""
 
 static func replace_text(path: String, old_text: String, new_text: String) -> String:
 	if old_text.is_empty():
@@ -711,7 +733,8 @@ class ErrorCaptureLogger extends Logger:
 	# Override _log_error (Godot 4.5+)
 	func _log_error(function: String, file: String, line: int, code: String, rationale: String, editor_notify: bool, error_type: int, script_backtraces: Array[ScriptBacktrace]) -> void:
 		if _is_capturing:
-			_log_buffer += "[Line %d]: %s\n" % [line, rationale]
+			var msg = rationale if not rationale.is_empty() else code
+			_log_buffer += "[Line %d]: %s\n" % [line, msg]
 
 # --- Run GDScript ---
 
@@ -757,7 +780,7 @@ static func run_gdscript(code: String) -> String:
 	var result = await instance.call("run")
 	
 	# Stop Capture
-	_error_logger.stop_capturing()
+	var runtime_errors = _error_logger.stop_capturing()
 	
 	# Cleanup temporary node
 	if instance is Node:
@@ -783,6 +806,17 @@ static func run_gdscript(code: String) -> String:
 
 	if result is Object:
 		var res_str = "[Object: %s ID:%d]" % [result.get_class(), result.get_instance_id()]
+		if not runtime_errors.is_empty():
+			res_str += "\n\nGDScript Errors during execution:\n%s" % runtime_errors
 		return res_str
-		
-	return str(result)
+	
+	if result is String and result.begins_with("data:image/"):
+		return result
+	
+	var result_str = str(result)
+	const MAX_RESULT_LENGTH = 5000
+	if result_str.length() > MAX_RESULT_LENGTH:
+		result_str = result_str.substr(0, MAX_RESULT_LENGTH) + "\n\n[Output truncated: %d of %d characters shown]" % [MAX_RESULT_LENGTH, result_str.length()]
+	if not runtime_errors.is_empty():
+		result_str += "\n\nGDScript Errors during execution:\n%s" % runtime_errors
+	return result_str
