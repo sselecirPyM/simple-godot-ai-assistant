@@ -4,6 +4,7 @@ extends EditorDock
 signal screenshot_captured(result: String)
 
 const EFFORT_OPTIONS: Array = ["default", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+const HISTORY_PATH = "res://.godot/ai_chat_history.json"
 
 # UI Elements
 var _main_layout: VBoxContainer
@@ -55,6 +56,8 @@ func _ready():
 	_http_request = HTTPRequest.new()
 	add_child(_http_request)
 	_http_request.request_completed.connect(_on_request_completed)
+
+	_load_history()
 
 func _exit_tree():
 	if _screenshot_request_active:
@@ -487,6 +490,8 @@ func _on_clear_pressed():
 	_clear_pending_image()
 	_context_label.text = "Tokens: 0"
 	_continue_btn.visible = false
+	if FileAccess.file_exists(HISTORY_PATH):
+		DirAccess.remove_absolute(HISTORY_PATH)
 
 func _clear_pending_image():
 	_pending_image_base64 = ""
@@ -689,9 +694,12 @@ func _process_chat_loop() -> bool:
 		else:
 			keep_going = false
 
+	_save_history()
 	return success
 
 func _send_to_api() -> Dictionary:
+	_save_history()
+
 	var headers = [
 		"Content-Type: application/json",
 		"Authorization: Bearer " + _config.get("api_key", ""),
@@ -771,6 +779,79 @@ func _execute_tool(name: String, json_args: String) -> String:
 		"load_skill": return AiTools.load_skill(args.get("name", ""))
 		"run_gdscript": return await AiTools.run_gdscript(args.get("code", ""))
 		_: return "Error: Unknown tool."
+
+func _save_history():
+	var file = FileAccess.open(HISTORY_PATH, FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify(_chat_history))
+
+func _load_history():
+	if not FileAccess.file_exists(HISTORY_PATH):
+		return
+	var file = FileAccess.open(HISTORY_PATH, FileAccess.READ)
+	var data = JSON.parse_string(file.get_as_text())
+	if not data is Array or data.is_empty():
+		return
+	_chat_history = data
+	for msg in _chat_history:
+		_replay_message(msg)
+	_append_system_message("Chat history restored (%d messages)." % _chat_history.size())
+	if _is_continuable():
+		_continue_btn.visible = true
+		_append_system_message("Conversation was interrupted. Press Continue to resume.")
+
+func _is_continuable() -> bool:
+	if _chat_history.is_empty():
+		return false
+	var last = _chat_history[_chat_history.size() - 1]
+	if last.get("role", "") == "assistant":
+		return false
+	var pending: Array = []
+	for msg in _chat_history:
+		if msg.get("role") == "assistant":
+			for tc in msg.get("tool_calls", []):
+				if tc is Dictionary:
+					pending.append(tc.get("id"))
+		elif msg.get("role") == "tool":
+			pending.erase(msg.get("tool_call_id"))
+	return pending.is_empty()
+
+func _replay_message(msg: Dictionary):
+	match msg.get("role", ""):
+		"user":
+			var content = msg.get("content")
+			if content is String:
+				_append_message("User", content)
+			elif content is Array:
+				var texts: Array = []
+				var has_image = false
+				for part in content:
+					if part is Dictionary:
+						if part.get("type") == "text":
+							texts.append(str(part.get("text", "")))
+						elif part.get("type") == "image_url":
+							has_image = true
+				var display = "\n".join(texts)
+				if has_image:
+					display += "\n[i][color=#8FBCBB](Attached Image)[/color][/i]"
+				_append_message("User", display)
+		"assistant":
+			if msg.get("reasoning_content"):
+				_append_system_message("🧠 Reasoning: " + str(str(msg["reasoning_content"]).length()) + " chars")
+			if msg.get("content"):
+				_append_message("AI", str(msg["content"]))
+			for tc in msg.get("tool_calls", []):
+				if tc is Dictionary:
+					var func_def = tc.get("function", {})
+					_append_system_message("🛠 [b]Called Tool:[/b] [color=#88C0D0]%s[/color]\nArguments: [color=#D8DEE9]%s[/color]" % [func_def.get("name", ""), func_def.get("arguments", "")])
+		"tool":
+			var content = msg.get("content")
+			if content is Array:
+				_append_system_message("✅ Result: [color=#A3BE8C](Image captured, sent as vision input)[/color]")
+			else:
+				var s = str(content)
+				var preview = s.substr(0, 150) + "..." if s.length() > 150 else s
+				_append_system_message("✅ Result: [color=#A3BE8C]" + preview + "[/color]")
 
 func _update_tokens(p_tok, c_tok, t_tok):
 	_context_label.text = "Tokens: %d (In: %d / Out: %d)" % [t_tok, p_tok, c_tok]
