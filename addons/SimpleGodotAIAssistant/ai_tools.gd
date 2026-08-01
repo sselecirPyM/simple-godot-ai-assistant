@@ -3,6 +3,7 @@ class_name AiTools
 extends RefCounted
 
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "bmp", "tga"]
+const TEXT_EXTENSIONS = ["cfg", "csv", "gd", "gdshader", "godot", "import", "ini", "json", "md", "shader", "tres", "tscn", "txt", "xml", "yaml", "yml", "cs"]
 const SKILLS_DIR = "res://skills/"
 
 # --- Tool Definitions ---
@@ -31,7 +32,9 @@ static func get_tool_definitions() -> Array[Dictionary]:
 				"parameters": {
 					"type": "object",
 					"properties": {
-						"path": { "type": "string", "description": "The full path of the file to read (e.g., 'res://main.gd')" }
+						"path": { "type": "string", "description": "The full path of the file to read (e.g., 'res://main.gd')" },
+						"offset": { "type": "integer", "description": "Optional. The 1-based line number to start reading from (default: 1)." },
+						"limit": { "type": "integer", "description": "Optional. The maximum number of lines to return." }
 					},
 					"required": ["path"]
 				}
@@ -48,6 +51,24 @@ static func get_tool_definitions() -> Array[Dictionary]:
 						"keyword": { "type": "string", "description": "The partial filename to search for." }
 					},
 					"required": ["keyword"]
+				}
+			}
+		},
+		{
+			"type": "function",
+			"function": {
+				"name": "grep",
+				"description": "Search text file contents recursively using a line-based regular expression. Returns matches as 'path:line_number: line_text'.",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"pattern": { "type": "string", "description": "The regular expression to search for." },
+						"path": { "type": "string", "description": "Optional. A file or directory path to search (default to 'res://')." },
+						"include": { "type": "string", "description": "Optional. Comma-separated filename glob filters, such as '*.gd,*.tscn' (default: '*')." },
+						"case_sensitive": { "type": "boolean", "description": "Optional. (default: true)." },
+						"max_results": { "type": "integer", "description": "Optional. (default: 100, maximum: 500)." }
+					},
+					"required": ["pattern"]
 				}
 			}
 		},
@@ -231,19 +252,25 @@ static func list_directory(path: String) -> String:
 	
 	return "\n".join(files)
 
-static func read_file(path: String) -> String:
+static func read_file(path: String, offset: int = 1, limit: int = 0) -> String:
 	if not FileAccess.file_exists(path):
 		return "Error: File not found."
 	
 	var file = FileAccess.open(path, FileAccess.READ)
 	if not file:
 		return "Error: Could not open file."
+	
+	if offset < 1:
+		return "Error: offset must be 1 or greater."
+	if limit < 0:
+		return "Error: limit must be 0 or greater."
 		
 	var length = file.get_length()
 	var extension = path.get_extension().to_lower()
 	var is_image = extension in IMAGE_EXTENSIONS
+	var is_paged = offset > 1 or limit > 0
 	
-	if not is_image and length > 10240:
+	if not is_image and not is_paged and length > 10240:
 		return "Error: File is too large (%d bytes). Text file limit is 10KB." % length
 		
 	if is_image:
@@ -265,10 +292,127 @@ static func read_file(path: String) -> String:
 		var mime_type = "jpeg" if extension == "jpg" else extension
 		return "data:image/%s;base64,%s" % [mime_type, base64]
 	
-	return file.get_as_text()
+	if not is_paged:
+		return file.get_as_text()
+	
+	var lines: PackedStringArray = []
+	var current_line = 1
+	var output_bytes = 0
+	
+	while not file.eof_reached():
+		var line = file.get_line()
+		if current_line >= offset:
+			var line_bytes = line.to_utf8_buffer().size()
+			if not lines.is_empty():
+				line_bytes += 1
+			if output_bytes + line_bytes > 10240:
+				return "Error: Requested range exceeds the 10KB output limit. Reduce limit or increase offset."
+			lines.append(line)
+			output_bytes += line_bytes
+			if limit > 0 and lines.size() >= limit:
+				break
+		current_line += 1
+	
+	return "\n".join(lines)
 
 static func search_files(keyword: String) -> String:
 	return _search_recursive("res://", keyword)
+
+static func grep(pattern: String, path: String = "res://", include: String = "*", case_sensitive: bool = true, max_results: int = 100) -> String:
+	if pattern.is_empty():
+		return "Error: pattern cannot be empty."
+	if path.is_empty():
+		path = "res://"
+	if include.is_empty():
+		include = "*"
+	if max_results < 1:
+		return "Error: max_results must be 1 or greater."
+	max_results = mini(max_results, 500)
+	
+	var regex = RegEx.new()
+	var regex_pattern = pattern if case_sensitive else "(?i)" + pattern
+	var err = regex.compile(regex_pattern)
+	if err != OK:
+		return "Error: Invalid regular expression: %s" % error_string(err)
+	
+	var results: Array[String] = []
+	if FileAccess.file_exists(path):
+		if _matches_include(path.get_file(), include):
+			_grep_file(path, regex, max_results, results)
+	else:
+		var dir = DirAccess.open(path)
+		if not dir:
+			return "Error: Path not found: %s" % path
+		_grep_recursive(path, regex, include, max_results, results)
+	
+	if results.is_empty():
+		return "No matches found."
+	
+	var output: PackedStringArray = []
+	for result in results:
+		output.append(result)
+	var output_text = "\n".join(output)
+	if results.size() >= max_results:
+		output_text += "\n... Results truncated at %d matches." % max_results
+	return output_text
+
+static func _grep_recursive(dir_path: String, regex: RegEx, include: String, max_results: int, results: Array[String]) -> void:
+	var dir = DirAccess.open(dir_path)
+	if not dir: return
+	
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+	var skip_dirs = [".", "..", ".godot", ".git"]
+	
+	while file_name != "":
+		if file_name in skip_dirs:
+			file_name = dir.get_next()
+			continue
+		
+		var full_path = dir_path.path_join(file_name)
+		if dir.current_is_dir():
+			_grep_recursive(full_path, regex, include, max_results, results)
+		elif _matches_include(file_name, include):
+			_grep_file(full_path, regex, max_results, results)
+		
+		if results.size() >= max_results:
+			return
+		file_name = dir.get_next()
+
+static func _grep_file(path: String, regex: RegEx, max_results: int, results: Array[String]) -> void:
+	if not _is_text_file(path):
+		return
+	
+	var file = FileAccess.open(path, FileAccess.READ)
+	if not file or file.get_length() > 1048576:
+		return
+	
+	var line_number = 1
+	while not file.eof_reached():
+		var line = file.get_line().trim_suffix("\r")
+		if regex.search(line):
+			var display_line = line
+			if display_line.length() > 300:
+				display_line = display_line.substr(0, 300) + "..."
+			results.append("%s:%d: %s" % [path, line_number, display_line])
+			if results.size() >= max_results:
+				return
+		line_number += 1
+
+static func _matches_include(file_name: String, include: String) -> bool:
+	if include == "*":
+		return true
+	
+	var lower_name = file_name.to_lower()
+	for filter in include.split(",", false):
+		var glob = filter.strip_edges().to_lower()
+		if not glob.is_empty() and lower_name.match(glob):
+			return true
+	return false
+
+static func _is_text_file(path: String) -> bool:
+	var extension = path.get_extension().to_lower()
+	return extension.is_empty() or extension in TEXT_EXTENSIONS
 
 static func take_screenshot(max_width: int = 1280, dock: Control = null) -> String:
 
@@ -581,9 +725,8 @@ static func create_file(path: String, content: String) -> String:
 	var is_shader = path.get_extension().to_lower() == "gdshader"
 
 	if is_shader:
-		if "hint_color" in content:
-			content = content.replace("hint_color", "source_color")
-		
+		content = OutputPatchRules.apply_shader_patches(content)
+
 		return _update_shader_with_cache_bypass(path, content)
 	else:
 		var file = FileAccess.open(path, FileAccess.WRITE)
@@ -661,8 +804,7 @@ static func replace_text(path: String, old_text: String, new_text: String) -> St
 	content = content.replace(old_text, new_text)
 
 	if path.get_extension().to_lower() == "gdshader":
-		if "hint_color" in content:
-			content = content.replace("hint_color", "source_color")
+		content = OutputPatchRules.apply_shader_patches(content)
 		return _update_shader_with_cache_bypass(path, content)
 
 	var out_file = FileAccess.open(path, FileAccess.WRITE)
@@ -741,8 +883,7 @@ class ErrorCaptureLogger extends Logger:
 static var _error_logger: ErrorCaptureLogger
 
 static func run_gdscript(code: String) -> String:
-	if not code.contains("@tool"):
-		code = "@tool\n" + code
+	code = OutputPatchRules.apply_script_patches(code)
 
 	if not _error_logger:
 		_error_logger = ErrorCaptureLogger.new()

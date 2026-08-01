@@ -765,8 +765,9 @@ func _execute_tool(name: String, json_args: String) -> String:
 	
 	match name:
 		"list_directory": return AiTools.list_directory(args.get("path", ""))
-		"read_file": return AiTools.read_file(args.get("path", ""))
+		"read_file": return AiTools.read_file(args.get("path", ""), int(args.get("offset", 1)), int(args.get("limit", 0)))
 		"search_files": return AiTools.search_files(args.get("keyword", ""))
+		"grep": return AiTools.grep(args.get("pattern", ""), args.get("path", "res://"), args.get("include", "*"), bool(args.get("case_sensitive", true)), int(args.get("max_results", 100)))
 		"get_scene_tree": return AiTools.get_scene_tree(str(args.get("node_id", "0")))
 		"get_selected_nodes": return AiTools.get_selected_nodes()
 		"get_object_properties": return AiTools.get_object_properties(str(args.get("object_id", "")))
@@ -794,6 +795,12 @@ func _load_history():
 		return
 	_chat_history = data
 	for msg in _chat_history:
+		if msg is Dictionary:
+			for tc in msg.get("tool_calls", []):
+				if tc is Dictionary and tc.has("index") and tc["index"] != null:
+					tc["index"] = int(tc["index"])
+	_patch_orphan_tool_calls()
+	for msg in _chat_history:
 		_replay_message(msg)
 	_append_system_message("Chat history restored (%d messages)." % _chat_history.size())
 	if _is_continuable():
@@ -815,6 +822,26 @@ func _is_continuable() -> bool:
 		elif msg.get("role") == "tool":
 			pending.erase(msg.get("tool_call_id"))
 	return pending.is_empty()
+
+func _patch_orphan_tool_calls():
+	var pending: Array = []
+	for msg in _chat_history:
+		if msg.get("role") == "assistant":
+			for tc in msg.get("tool_calls", []):
+				if tc is Dictionary:
+					pending.append(tc.get("id"))
+		elif msg.get("role") == "tool":
+			pending.erase(msg.get("tool_call_id"))
+	if pending.is_empty():
+		return
+	for id in pending:
+		var tool_msg = {
+			"role": "tool",
+			"tool_call_id": id,
+			"content": "Error: session was interrupted before this tool result was recorded."
+		}
+		_chat_history.append(tool_msg)
+	_save_history()
 
 func _replay_message(msg: Dictionary):
 	match msg.get("role", ""):
