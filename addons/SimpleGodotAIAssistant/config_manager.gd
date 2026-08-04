@@ -62,13 +62,16 @@ static func load_data() -> Dictionary:
 	var data = {
 		"profiles": get_default_profiles(),
 		"active_profile": "OpenAI",
-		"enabled_skills": []
+		"enabled_skills": [],
+		"multimodal_enabled": true
 	}
 
 	if FileAccess.file_exists(CONFIG_PATH):
 		var file = FileAccess.open(CONFIG_PATH, FileAccess.READ)
 		var json = JSON.parse_string(file.get_as_text())
 		if json and json is Dictionary:
+			if json.has("multimodal_enabled"):
+				data["multimodal_enabled"] = bool(json["multimodal_enabled"])
 			if json.has("enabled_skills") and json["enabled_skills"] is Array:
 				data["enabled_skills"] = json["enabled_skills"]
 			if json.has("profiles"):

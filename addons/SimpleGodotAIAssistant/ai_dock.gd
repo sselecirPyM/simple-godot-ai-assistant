@@ -27,13 +27,15 @@ var _profile_list: ItemList
 var _profile_name_edit: LineEdit
 var _skills_btn: Button
 var _skills_panel: PanelContainer
-var _skills_list: ItemList
+var _skills_list: VBoxContainer
+var _multimodal_check: CheckBox
 
 # Logic
 var _profiles: Dictionary
 var _active_profile: String
 var _config: Dictionary
 var _enabled_skills: Array = []
+var _multimodal_enabled: bool = true
 var _last_response_raw: String = ""
 var _chat_history: Array = []
 var _http_request: HTTPRequest
@@ -51,6 +53,7 @@ func _ready():
 	_active_profile = data["active_profile"]
 	_config = _profiles[_active_profile]
 	_enabled_skills = data.get("enabled_skills", [])
+	_multimodal_enabled = data.get("multimodal_enabled", true)
 	_setup_ui()
 	
 	_http_request = HTTPRequest.new()
@@ -276,7 +279,13 @@ func _create_settings_panel():
 	grid.add_child(_effort_option)
 	
 	vbox.add_child(grid)
-	
+
+	_multimodal_check = CheckBox.new()
+	_multimodal_check.text = "Enable Multimodal (vision: screenshots & image input)"
+	_multimodal_check.button_pressed = _multimodal_enabled
+	_multimodal_check.toggled.connect(_on_multimodal_toggled)
+	vbox.add_child(_multimodal_check)
+
 	var save_btn = Button.new()
 	save_btn.text = "Save Settings & Close"
 	save_btn.pressed.connect(_save_settings)
@@ -340,13 +349,14 @@ func _create_skills_panel():
 	info_lbl.modulate = Color(0.7, 0.7, 0.7)
 	vbox.add_child(info_lbl)
 
-	_skills_list = ItemList.new()
-	_skills_list.select_mode = ItemList.SELECT_MULTI
-	_skills_list.allow_reselect = true
-	_skills_list.custom_minimum_size = Vector2(0, 120)
+	var scroll = ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0, 120)
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_child(scroll)
+
+	_skills_list = VBoxContainer.new()
 	_skills_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_skills_list.multi_selected.connect(_on_skill_multi_selected)
-	vbox.add_child(_skills_list)
+	scroll.add_child(_skills_list)
 
 	var refresh_btn = Button.new()
 	refresh_btn.text = "Refresh List"
@@ -359,26 +369,31 @@ func _on_skills_toggled(toggled: bool):
 		_refresh_skills_list()
 
 func _refresh_skills_list():
-	_skills_list.clear()
+	for child in _skills_list.get_children():
+		child.queue_free()
 	var available = AiTools.get_available_skills()
 	var still_valid: Array = []
 	for skill_name in available:
 		var data = AiTools.parse_skill_file(AiTools.SKILLS_DIR.path_join(skill_name + ".md"))
-		var idx = _skills_list.add_item(skill_name)
+		var check = CheckBox.new()
+		check.text = skill_name
 		if not data["description"].is_empty():
-			_skills_list.set_item_tooltip(idx, data["description"])
+			check.tooltip_text = data["description"]
 		if skill_name in _enabled_skills:
-			_skills_list.select(idx, false)
+			check.button_pressed = true
 			still_valid.append(skill_name)
+		check.toggled.connect(_on_skill_check_toggled)
+		_skills_list.add_child(check)
 	if still_valid.size() != _enabled_skills.size():
 		_enabled_skills = still_valid
 		_save_all()
 	_update_skills_btn_text()
 
-func _on_skill_multi_selected(_index: int, _selected: bool):
+func _on_skill_check_toggled(_toggled: bool):
 	_enabled_skills.clear()
-	for idx in _skills_list.get_selected_items():
-		_enabled_skills.append(_skills_list.get_item_text(idx))
+	for check in _skills_list.get_children():
+		if check is CheckBox and check.button_pressed:
+			_enabled_skills.append(check.text)
 	_save_all()
 	_update_skills_btn_text()
 	if not _enabled_skills.is_empty():
@@ -456,11 +471,17 @@ func _sync_fields_to_profile():
 	_config["model"] = _model_edit.text
 	_config["reasoning_effort"] = _effort_option.get_item_text(_effort_option.selected)
 
+func _on_multimodal_toggled(toggled: bool):
+	_multimodal_enabled = toggled
+	_save_all()
+	_append_system_message("Multimodal (vision) " + ("enabled." if toggled else "disabled. Screenshot tool removed."))
+
 func _save_all():
 	AiConfigManager.save_data({
 		"profiles": _profiles,
 		"active_profile": _active_profile,
-		"enabled_skills": _enabled_skills
+		"enabled_skills": _enabled_skills,
+		"multimodal_enabled": _multimodal_enabled
 	})
 
 func _on_settings_toggled(toggled: bool):
@@ -476,6 +497,7 @@ func _update_fields():
 	var effort = _config.get("reasoning_effort", "high")
 	var idx = EFFORT_OPTIONS.find(effort)
 	_effort_option.selected = idx if idx >= 0 else EFFORT_OPTIONS.find("high")
+	_multimodal_check.button_pressed = _multimodal_enabled
 
 func _save_settings():
 	_sync_fields_to_profile()
@@ -714,7 +736,7 @@ func _send_to_api() -> Dictionary:
 	var body = {
 		"model": _config.get("model", "gpt-4o"),
 		"messages": messages,
-		"tools": AiTools.get_tool_definitions(),
+		"tools": AiTools.get_tool_definitions(_multimodal_enabled),
 		"max_tokens": 16000
 	}
 

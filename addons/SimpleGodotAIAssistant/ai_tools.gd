@@ -8,8 +8,8 @@ const SKILLS_DIR = "res://skills/"
 
 # --- Tool Definitions ---
 
-static func get_tool_definitions() -> Array[Dictionary]:
-	return [
+static func get_tool_definitions(multimodal_enabled: bool = true) -> Array[Dictionary]:
+	var tools: Array[Dictionary] = [
 		{
 			"type": "function",
 			"function": {
@@ -231,6 +231,15 @@ static func get_tool_definitions() -> Array[Dictionary]:
 			}
 		}
 	]
+
+	if not multimodal_enabled:
+		var filtered: Array[Dictionary] = []
+		for t in tools:
+			if t["function"]["name"] != "take_screenshot":
+				filtered.append(t)
+		tools = filtered
+
+	return tools
 
 # --- File Operations ---
 
