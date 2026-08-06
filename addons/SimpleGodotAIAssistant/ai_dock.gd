@@ -29,6 +29,7 @@ var _skills_btn: Button
 var _skills_panel: PanelContainer
 var _skills_list: VBoxContainer
 var _multimodal_check: CheckBox
+var _system_prompt_edit: TextEdit
 
 # Logic
 var _profiles: Dictionary
@@ -280,6 +281,15 @@ func _create_settings_panel():
 	
 	vbox.add_child(grid)
 
+	vbox.add_child(_create_label("Custom System Prompt (injected before chat):"))
+	_system_prompt_edit = TextEdit.new()
+	_system_prompt_edit.text = _config.get("system_prompt", "")
+	_system_prompt_edit.custom_minimum_size = Vector2(0, 80)
+	_system_prompt_edit.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	_system_prompt_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_system_prompt_edit.placeholder_text = "e.g. You are an expert Godot 4 assistant. Always answer in Chinese."
+	vbox.add_child(_system_prompt_edit)
+
 	_multimodal_check = CheckBox.new()
 	_multimodal_check.text = "Enable Multimodal (vision: screenshots & image input)"
 	_multimodal_check.button_pressed = _multimodal_enabled
@@ -470,6 +480,7 @@ func _sync_fields_to_profile():
 	_config["api_key"] = _key_edit.text
 	_config["model"] = _model_edit.text
 	_config["reasoning_effort"] = _effort_option.get_item_text(_effort_option.selected)
+	_config["system_prompt"] = _system_prompt_edit.text.strip_edges()
 
 func _on_multimodal_toggled(toggled: bool):
 	_multimodal_enabled = toggled
@@ -497,6 +508,7 @@ func _update_fields():
 	var effort = _config.get("reasoning_effort", "high")
 	var idx = EFFORT_OPTIONS.find(effort)
 	_effort_option.selected = idx if idx >= 0 else EFFORT_OPTIONS.find("high")
+	_system_prompt_edit.text = _config.get("system_prompt", "")
 	_multimodal_check.button_pressed = _multimodal_enabled
 
 func _save_settings():
@@ -529,6 +541,10 @@ func _on_input_gui_input(event: InputEvent):
 		# Check for Ctrl+V / Cmd+V
 		if event.keycode == KEY_V and (event.ctrl_pressed or event.meta_pressed):
 			if DisplayServer.clipboard_has_image():
+				if not _multimodal_enabled:
+					_append_system_message("Error: Multimodal (vision) is disabled. Enable it in settings to send images.")
+					get_viewport().set_input_as_handled()
+					return
 				var img = DisplayServer.clipboard_get_image()
 				if img:
 					var buffer = img.save_png_to_buffer()
@@ -551,6 +567,12 @@ func _on_stop_pressed():
 
 func _on_send_pressed():
 	var text = _input_box.text.strip_edges()
+	
+	if not _pending_image_base64.is_empty() and not _multimodal_enabled:
+		_clear_pending_image()
+		_append_system_message("Error: Multimodal (vision) is disabled. The attached image was not sent.")
+		if text.is_empty():
+			return
 	
 	if (text.is_empty() and _pending_image_base64.is_empty()) or _is_processing:
 		return
@@ -692,6 +714,9 @@ func _process_chat_loop() -> bool:
 
 				var result_str = await _execute_tool(func_name, args_json)
 
+				if result_str.begins_with("data:image/") and not _multimodal_enabled:
+					result_str = "Error: This tool produced an image, but multimodal (vision) is disabled for the current model. The image was not sent; answer based on text information only."
+
 				if result_str.begins_with("data:image/"):
 					_append_system_message("✅ Result: [color=#A3BE8C](Image captured, sent as vision input)[/color]")
 					_chat_history.append({
@@ -729,9 +754,15 @@ func _send_to_api() -> Dictionary:
 	]
 	
 	var messages = _chat_history
+	var prompt_parts: Array = []
+	var custom_prompt = _config.get("system_prompt", "").strip_edges()
+	if not custom_prompt.is_empty():
+		prompt_parts.append(custom_prompt)
 	var skills_prompt = AiTools.get_skills_system_prompt(_enabled_skills)
 	if not skills_prompt.is_empty():
-		messages = [{ "role": "system", "content": skills_prompt }] + _chat_history
+		prompt_parts.append(skills_prompt)
+	if not prompt_parts.is_empty():
+		messages = [{ "role": "system", "content": "\n\n".join(prompt_parts) }] + _chat_history
 
 	var body = {
 		"model": _config.get("model", "gpt-4o"),

@@ -64,7 +64,7 @@ static func get_tool_definitions(multimodal_enabled: bool = true) -> Array[Dicti
 					"properties": {
 						"pattern": { "type": "string", "description": "The regular expression to search for." },
 						"path": { "type": "string", "description": "Optional. A file or directory path to search (default to 'res://')." },
-						"include": { "type": "string", "description": "Optional. Comma-separated filename glob filters, such as '*.gd,*.tscn' (default: '*')." },
+						"include": { "type": "string", "description": "Optional. Comma-separated filename glob filters, such as '*.gd,*.tscn,*.cs' (default: '*')." },
 						"case_sensitive": { "type": "boolean", "description": "Optional. (default: true)." },
 						"max_results": { "type": "integer", "description": "Optional. (default: 100, maximum: 500)." }
 					},
@@ -279,8 +279,8 @@ static func read_file(path: String, offset: int = 1, limit: int = 0) -> String:
 	var is_image = extension in IMAGE_EXTENSIONS
 	var is_paged = offset > 1 or limit > 0
 	
-	if not is_image and not is_paged and length > 10240:
-		return "Error: File is too large (%d bytes). Text file limit is 10KB." % length
+	if not is_image and not is_paged and length > 20480:
+		return "Error: File is too large (%d bytes). Text file limit is 20KB." % length
 		
 	if is_image:
 		var img = Image.load_from_file(path)
@@ -314,8 +314,8 @@ static func read_file(path: String, offset: int = 1, limit: int = 0) -> String:
 			var line_bytes = line.to_utf8_buffer().size()
 			if not lines.is_empty():
 				line_bytes += 1
-			if output_bytes + line_bytes > 10240:
-				return "Error: Requested range exceeds the 10KB output limit. Reduce limit or increase offset."
+			if output_bytes + line_bytes > 20480:
+				return "Error: Requested range exceeds the 20KB output limit. Reduce limit or increase offset."
 			lines.append(line)
 			output_bytes += line_bytes
 			if limit > 0 and lines.size() >= limit:
@@ -786,8 +786,8 @@ static func replace_text(path: String, old_text: String, new_text: String) -> St
 		return "Error: Could not open file '%s'." % path
 
 	var length = file.get_length()
-	if length > 102400:
-		return "Error: File is too large (%d bytes). Edit limit is 100KB." % length
+	if length > 204800:
+		return "Error: File is too large (%d bytes). Edit limit is 200KB." % length
 
 	var content = file.get_as_text()
 	file.close()

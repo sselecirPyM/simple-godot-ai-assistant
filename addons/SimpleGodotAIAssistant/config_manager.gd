@@ -9,7 +9,8 @@ static func get_default_profile() -> Dictionary:
 		"endpoint": "https://api.openai.com/v1/chat/completions",
 		"api_key": "",
 		"model": "gpt-5.6-sol",
-		"reasoning_effort": "high"
+		"reasoning_effort": "high",
+		"system_prompt": ""
 	}
 
 static func get_default_profiles() -> Dictionary:
