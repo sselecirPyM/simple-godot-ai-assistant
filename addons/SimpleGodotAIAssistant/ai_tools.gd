@@ -785,10 +785,6 @@ static func replace_text(path: String, old_text: String, new_text: String) -> St
 	if file == null:
 		return "Error: Could not open file '%s'." % path
 
-	var length = file.get_length()
-	if length > 204800:
-		return "Error: File is too large (%d bytes). Edit limit is 200KB." % length
-
 	var content = file.get_as_text()
 	file.close()
 
