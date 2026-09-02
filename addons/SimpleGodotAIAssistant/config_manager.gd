@@ -48,13 +48,13 @@ static func get_default_profiles() -> Dictionary:
 		"Zhipu": {
 			"endpoint": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
 			"api_key": "",
-			"model": "glm-5.2",
+			"model": "glm-5.3",
 			"reasoning_effort": "high"
 		},
 		"Zhipu Coding plan": {
-			"endpoint": "https://open.bigmodel.cn/api/coding/paas/v4/completions",
+			"endpoint": "https://open.bigmodel.cn/api/coding/paas/v4",
 			"api_key": "",
-			"model": "glm-5.2",
+			"model": "glm-5.3",
 			"reasoning_effort": "high"
 		}
 	}
