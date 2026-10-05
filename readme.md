@@ -8,7 +8,7 @@ A Godot AI Agent plugin adapted for multimodal models, verified on KIMI K3.
 
 Usage:
 
-Open Settings in the AI Assistant window and configure the API Key. Each project uses independent settings, so you need to reconfigure the API when switching to another project.
+Open Settings in the AI Assistant window and configure the API Key. Provider profiles (endpoint, model, API key) are stored globally and shared across all projects; the currently selected profile, skills, and multimodal toggle are stored per project.
 
 You can type text in the chat box, and press Ctrl+V in the input box to paste images.
 
@@ -20,7 +20,7 @@ You can create a `skills` folder and place any markdown files in it to add skill
 
 使用方法：
 
-在AI Assistant窗口打开设置，配置API Key。每个项目使用独立的设置，切换到其它项目时需要重新配置API。
+在AI Assistant窗口打开设置，配置API Key。提供商配置（endpoint、模型、API Key）为全局配置，在所有项目间共享；当前使用的模型、技能、多模态开关按项目独立保存。
 
 在聊天框可以输入文本，在输入框按下ctrl+v粘贴图片。
 
